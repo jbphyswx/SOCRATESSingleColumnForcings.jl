@@ -1,5 +1,12 @@
 # SOCRATESSingleColumnForcings
 
+| **DOI**                           | [![DOI][zenodo-img]][zenodo-latest-url]          |
+|-----------------------------------|--------------------------------------------------|
+
+[zenodo-img]: https://zenodo.org/badge/585317234.svg
+[zenodo-latest-url]: https://doi.org/10.5281/zenodo.14945665
+
+
 This repository includes scripts to take in SOCRATES flight data and create both 2D [lev,time] datasets and 1D [lev] columns of time-interpoloation functions to force the CliMA EDMF Turbulence-Convection single-column model.
 
 The profiles are created off the data used to force LES simulations by Atlas, 2020 (https://doi.org/10.1029/2020MS002205), some of her scripts are included in /Rachel_Atlas_Scripts.
