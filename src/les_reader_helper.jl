@@ -28,8 +28,83 @@ function get_data_new_z_t_LES(
     Spline1D_interp_kwargs::Dict = Dict{Symbol, Any}(:bc => "extrapolate"), # default to extrapolate bc RF09 was run on a different grid for some reason, we're not necessarily guaranteed to have the same z
     pchip_interp_kwargs::Dict = Dict{Symbol, Any}(:bc => "extrapolate"),
     ground_indices = :end,
+    conservative_interp::Bool = false,
+    conservative_interp_kwargs::Dict = Dict{Symbol, Any}(),
+    weight = nothing, # for extensive variables and for conservative regridding, you may wish to weight by something like density when interpolating in z...
+    weightg = nothing, # for extensive variables and for conservative regridding, you may wish to weight by something like density when interpolating in z...
+    return_before_interp::Bool = false,
+    A::Union{Array, Nothing} = nothing,
+    Af::Union{Array, Nothing} = nothing,
 )
 
+    if conservative_interp && isnothing(A)
+        LinearAlgebra.BLAS.set_num_threads(1) # if you're on HPC this is essential to A\b not slowing down by 5 orders of magnitude from 1ms to 100s
+        if interp_method ∈ [:Spline1D, :Dierckx]
+            A = get_conservative_A(z_new; method = interp_method, Spline1D_interp_kwargs...)
+        elseif interp_method ∈ [:pchip_smooth_derivative, :pchip_smooth]
+            A = get_conservative_A(z_new; method = interp_method, pchip_interp_kwargs...)
+        else
+            error("unsupported interpolation method")
+        end
+        Af = LinearAlgebra.factorize(A) # factorize the matrix for faster solving
+    end
+
+    # Preprocess the weights by running the function with the weights as the data but shortcircuiting the response usnig return_before_interp
+    if !isnothing(weight)
+        if !isnothing(weightg)
+            weight = get_data_new_z_t_LES(
+                weight,
+                z_new,
+                z_dim,
+                time_dim,
+                flight_number,
+                forcing_type;
+                weight = nothing,
+                weightg = nothing,
+                varg = weightg,
+                return_before_interp = true,
+                z_old = z_old,
+                t_old = t_old,
+                data = data,
+                initial_condition = initial_condition,
+                assume_monotonic = assume_monotonic,
+                interp_method = interp_method,
+                Spline1D_interp_kwargs = Spline1D_interp_kwargs,
+                pchip_interp_kwargs = pchip_interp_kwargs,
+                ground_indices = ground_indices,
+                conservative_interp = conservative_interp,
+                conservative_interp_kwargs = conservative_interp_kwargs,
+                A = A,
+                Af = Af,
+            )
+        else
+            weight = get_data_new_z_t_LES(
+                weight,
+                z_new,
+                z_dim,
+                time_dim,
+                flight_number,
+                forcing_type;
+                weight = nothing,
+                weightg = nothing,
+                varg = nothing,
+                return_before_interp = true,
+                z_old = z_old,
+                t_old = t_old,
+                data = data,
+                initial_condition = initial_condition,
+                assume_monotonic = assume_monotonic,
+                interp_method = interp_method,
+                Spline1D_interp_kwargs = Spline1D_interp_kwargs,
+                pchip_interp_kwargs = pchip_interp_kwargs,
+                ground_indices = ground_indices,
+                conservative_interp = conservative_interp,
+                conservative_interp_kwargs = conservative_interp_kwargs,
+                A = A,
+                Af = Af,
+            )
+        end
+    end
 
 
     if isa(var, String) && isnothing(data)
@@ -87,6 +162,10 @@ function get_data_new_z_t_LES(
     # z_old = reverse(z_old; dims = z_dim_num)
     # vardata = reverse(vardata; dims = z_dim_num)
 
+    if return_before_interp # short circuit and just return the preprocessed vardata
+        return vardata
+    end
+
     # interpolate to new z (though it should alreayd be on the new z, though I guess you could do some smoothing/rounding etc)
 
     if interp_method ∈ [:Spline1D, :Dierckx]
@@ -98,6 +177,11 @@ function get_data_new_z_t_LES(
             data = data,
             interp_method = interp_method,
             interp_kwargs = Spline1D_interp_kwargs,
+            conservative_interp = conservative_interp,
+            conservative_interp_kwargs = conservative_interp_kwargs,
+            weight = weight,
+            A = A,
+            Af = Af,
         ) # extrapolate bc it's not a guarantee that our new z  will contain our desired z (mostly bc RF09 was run on a different grid for some reason) 
     elseif interp_method ∈ [:pchip_smooth_derivative, :pchip_smooth]
         vardata = var_to_new_coord(
@@ -108,6 +192,11 @@ function get_data_new_z_t_LES(
             data = data,
             interp_method = interp_method,
             interp_kwargs = pchip_interp_kwargs,
+            conservative_interp = conservative_interp,
+            conservative_interp_kwargs = conservative_interp_kwargs,
+            weight = weight,
+            A = A,
+            Af = Af,
         )
     else
         error("unsupported interpolation method")
@@ -128,6 +217,7 @@ function get_data_new_z_t_LES(
         data = data,
         interp_method = :Spline1D, # in time, we're gonna stick to linear interpolation for now... this one maybe can be pchip since it's all within the data bounds? idk... i was getting w=0 using pchip... possibly because
         interp_kwargs = Spline1D_interp_kwargs,
+        conservative_interp = false, # not need for conservative interp in time... maybe? it's philosophical and depends on the variable... does the time-averaged or instantaneous value matter more... However, we are just creating time splines and the timestep is up to your model... your model thus has to handle any time averaging etc...
     )
 
     return vardata

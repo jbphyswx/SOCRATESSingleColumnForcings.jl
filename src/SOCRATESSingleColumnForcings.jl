@@ -6,7 +6,10 @@ import NCDatasets as NC
 using DelimitedFiles
 using Statistics
 using Dierckx
+using LinearAlgebra: LinearAlgebra, factorize
 using Dates
+
+LinearAlgebra.BLAS.set_num_threads(1) # if you're on HPC this is essential to A\b not slowing down by 5 orders of magnitude from 1ms to 100s 
 
 # include our files
 const FT = Float64

@@ -8,6 +8,11 @@ import Thermodynamics.Parameters as TDP
 @testset "SOCRATESSingleColumnForcings" begin
     FT = Float64
 
+    # print package versions
+    @info "SOCRATESSingleColumnForcings version: $(pkgversion(SSCF))"
+    @info "CLIMAParameters version: $(pkgversion(CP))"
+    @info "Thermodynamics version: $(pkgversion(TD))"
+
     toml_dict = CP.create_toml_dict(FT; dict_type = "alias") # CP 0.7 and below, Thermodynamics 0.11 and above
     aliases = string.(fieldnames(TDP.ThermodynamicsParameters))
     param_pairs = CP.get_parameter_values!(toml_dict, aliases, "Thermodynamics")
@@ -29,12 +34,13 @@ import Thermodynamics.Parameters as TDP
 
     # these no longer work w/o output_data downloaded
 
-    new_zs = (nothing, collect(1:100:4000))
+    new_zs = (nothing, FT.(1:100:4000))
 
     initial_conditions = (false, true)
     surfaces = (nothing, "reference_state", "surface_conditions")
     use_LES_output_for_zs = (false, true)
     return_old_zs = (false, true)
+    conservative_interps = (false, true)
 
     setups = Iterators.product(
         SSCF.flight_numbers,
@@ -44,12 +50,20 @@ import Thermodynamics.Parameters as TDP
         surfaces,
         use_LES_output_for_zs,
         return_old_zs,
+        conservative_interps,
     )
 
     n_setups = length(setups)
     for (i, setup) in enumerate(setups)
         @info "Testing combination $i/$n_setups"
-        flight_number, forcing_type, new_z, initial_condition, surface, use_LES_output_for_z, return_old_z = setup
+        flight_number,
+        forcing_type,
+        new_z,
+        initial_condition,
+        surface,
+        use_LES_output_for_z,
+        return_old_z,
+        conservative_interp = setup
         data = SSCF.open_atlas_les_input(flight_number, forcing_type; open_files = false)
         # check files all exist
         # if isfile(data[forcing_type]) && isfile(data[:grid_data])
@@ -64,6 +78,7 @@ import Thermodynamics.Parameters as TDP
                 surface = surface,
                 use_LES_output_for_z = use_LES_output_for_z,
                 return_old_z = return_old_z,
+                conservative_interp = conservative_interp,
                 fail_on_missing_data = false,
             )
             @test true # if no error, test passes

@@ -1,6 +1,11 @@
-using ForwardDiff
-using PCHIPInterpolation
-using Dierckx
+using ForwardDiff: ForwardDiff
+using PCHIPInterpolation: PCHIPInterpolation
+using Dierckx: Dierckx, Spline1D
+using Integrals: Integrals
+using NonNegLeastSquares: NonNegLeastSquares, nonneg_lsq
+
+
+
 
 function pyinterp(
     x,
@@ -41,8 +46,9 @@ function pyinterp(
     end
 end
 
+# TODO: Turn these piecewise pchip functions into a real function object (create my own class?) so we can analytically integrate them. it's just linear, quadratic and pchip
 
-function pchip_extrapolate(spl::PCHIPInterpolation.Interpolator)
+function pchip_extrapolate(spl::PCHIPInterpolation.Interpolator; return_piecewise_function::Bool = false)
     # extrapolating beyond the bounds of the data, we'll just continue the slope at the edge of the data for continuous derivative (though not necessarily smooth)
     xmin = spl.xs[1]
     xmax = spl.xs[end]
@@ -157,4 +163,334 @@ function pchip_smooth_derivative(
         end
     end
 
+end
+
+
+
+
+"""
+1D Conservative Regridder
+
+Given points (xp, yp), regrids to points (x,y) such that the integral of the function over the new points is (approximately) equal to the integral of the function over the old points
+This is done by integrating the spline over the area of influence of each point, which is defined as the region over which the point is the nearest neighbor in the new grid. 
+
+When upsampling, this should mostly just follow the spline (though slightly diffusive -- NOTE: is there any way to stop this diffusion from the "area of influence"? i.e. to be able to retrieve the original values? not really the spline is inherently diffusive of each point's delta fcn.
+When downsampling though, you gain conservation when you otherwise would not have it.
+
+"""
+function conservative_regridder(
+    x::AbstractVector,
+    xp::AbstractVector,
+    yp::AbstractVector;
+    bc::String = "error",
+    k::Int = 1,
+    method::Symbol = :Spline1D,
+    f_enhancement_factor::Union{Int, Nothing} = nothing,
+    f_p_enhancement_factor::Union{Int, Nothing} = nothing,
+    integrate_method::Symbol = :invert,
+    rtol = FT(1e-6),
+    preserve_monotonicity::Bool = false,
+    enforce_positivity::Bool = false,
+    nnls_alg::Symbol = :fnnls,
+    enforce_conservation::Bool = true,
+    A::Union{AbstractMatrix, Nothing} = nothing,
+    Af::Union{AbstractMatrix, Nothing} = nothing,
+) where {}
+
+    # Build the spline
+    # each node gets the mean of the spline over its area of influence, which we'll define as being the nearest neighbor
+    # at the lower and upper end we'll extrapolate as far as the previous edge
+
+    # get the spline
+    spl = pyinterp(
+        x,
+        xp,
+        yp;
+        k = k,
+        bc = bc,
+        method = method,
+        f_enhancement_factor = f_enhancement_factor,
+        f_p_enhancement_factor = f_p_enhancement_factor,
+        return_spl = true,
+    )
+
+    # calculate bin edges, at the end assume the same spacing, as is if it was a cell center
+    x_edges = FT[
+        x[1] - (x[2] - x[1]) / 2,
+        (x[1:(end - 1)] .+ (x[2:end] - x[1:(end - 1)]) / 2)...,
+        x[end] + (x[end] - x[end - 1]) / 2,
+    ]
+
+
+
+    y::Vector{FT} = zeros(FT, size(x))
+    for i in 1:length(x)
+        # integrate over the area of influence
+
+        if method == :Spline1D
+            y[i] = Dierckx.integrate(spl, x_edges[i], x_edges[i + 1]) / (x_edges[i + 1] - x_edges[i])
+        elseif method ∈ (:pchip, :pchip_smooth_derivative, :pchip_smooth)
+            # we don't have a good way to interpolate the pchip output fcn bc it's piecewise, so we integrate it numerically
+            y[i] =
+                Integrals.solve(
+                    Integrals.IntegralProblem((x, p) -> spl(x), (x_edges[i], x_edges[i + 1])),
+                    Integrals.QuadGKJL(),
+                ).u / (x_edges[i + 1] - x_edges[i])
+        else
+            error("method not recognized")
+        end
+    end
+
+
+    if integrate_method == :integrate
+        # Then we're done... 
+    elseif integrate_method == :invert # This should be less diffusive and better preserve peaks so we make it the default
+        # really, integrating the spline gives us the necessary mass, but it doesn't tell us the values at the points that would create a spline with that mass
+        # really, what we want is a value such that calculating a new spline with the new points would yield the same total
+        # for linear that's hard to do, but not so easy for a spline since you don't know what the new coefficients would be...
+
+        # we need to find values that will yield the masses 
+
+        # xf = x_edges
+        # Δx = xf[2:end] .- xf[1:end-1]
+        # spline_orig = spl
+        # mc_avg = [first(Integrals.QuadGK.quadgk(spline_orig, xf[i], xf[i+1])) / Δx[i] for i in eachindex(Δx)]
+
+        _, y = conservative_spline_values(
+            x_edges,
+            y;
+            k = k,
+            method = method,
+            bc = bc,
+            f_enhancement_factor = f_enhancement_factor,
+            f_p_enhancement_factor = f_p_enhancement_factor,
+            rtol = rtol,
+            enforce_positivity = enforce_positivity,
+            nnls_alg = nnls_alg,
+            A = A,
+            Af = Af,
+        ) # this is the new y values that will yield the same mass as the original spline
+
+        if preserve_monotonicity # ensure our new values are within the bounds of their adjacent points in the original grid
+            for i in 1:(length(x))
+
+
+                # Find index of largest point in xp smaller than x_edges[i]
+                i_low = searchsortedlast(xp, x_edges[i]) - (k - 1) # Find index of largest point in xp smaller than x_edges[i]. We've already a span of 1 from i_low to i_high so k-1 is enough width here I think... (meaning k=1, you'd still have at least 2 total points contributing... bc edges are all unique)
+                # Find index of smallest point in xp larger than x_edges[i+1]
+                i_high = searchsortedfirst(xp, x_edges[i + 1]) + (k - 1)  # Find index of smallest point in xp larger than x_edges[i+1]
+
+                if (i_low < 1) || (i_high > length(xp)) # if our point has a support beyond the data bounds, we can't really hope to contain it... we could add an option to just only use the truncated data but...
+                    continue
+                end
+
+                y[i] = clamp(y[i], minimum(yp[i_low:i_high]), maximum(yp[i_low:i_high])) # clamp the value to the bounds of the two points around it
+
+
+            end
+        end
+
+
+        # inversion can be leaky, resolve if asked (:integrate is by definition not leaky since it's just the original integral of the spline.)
+        if enforce_conservation
+            if method == :Spline1D
+                total = Dierckx.integrate(Dierckx.Spline1D(x, y; k = k, bc = bc), x_edges[1], x_edges[end])
+                if !iszero(total)
+                    y *= Dierckx.integrate(spl, x_edges[1], x_edges[end]) / total # this is the total mass of the original data
+                else
+                    # we can't really do much here, maybe y is supposed to be nonzero but sum to zero, maybe not... who knows
+                end
+            elseif method ∈ (:pchip, :pchip_smooth_derivative, :pchip_smooth)
+                total =
+                    Integrals.solve(
+                        Integrals.IntegralProblem((x, p) -> spl(x), (x_edges[1], x_edges[end])),
+                        Integrals.QuadGKJL(),
+                    ).u
+                if !iszero(total)
+                    y *= Dierckx.integrate(spl, x_edges[1], x_edges[end]) / total # this is the total mass of the original data
+                else
+                    # we can't really do much here, maybe y is supposed to be nonzero but sum to zero, maybe not... who knows
+                end
+            end
+        end
+
+
+    else
+        error("integrate_method not recognized")
+        # each new point takes the average of its area of influence. we still use the spline in case we need to upsample
+    end
+
+    # this fcn doesn't really support returning a spline, you could take the new out and x and make a spline but it's kind of meaningless bc integrating that spline isn't conservative, it's the original spline that was the point...
+    return y
+
+end
+
+
+"""
+Given x_edges and integrated masses between them, calculates y at xc such that an equivalent spline on yc integrated over x_edges gives the same mass as the original spline.
+
+E.g.
+
+    x = [1,2,3,4,5,6]
+    y = [0,0,1,-1,0,0]
+
+    x_edges = [0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5]
+
+    spl = pyinterp(_, x, y; spl_kwargs... return_spl = true)
+    masses = [first(Integrals.QuadGK.quadgk(spl, x_edges[i], x_edges[i+1])) for i in 1:(length(x_edges)-1)]
+
+    x_new = [ 1.5, 3.5, 5.5]
+    x_new_edges = [0.5, 2.5, 4.5, 6.5]
+    We want to find y_new such integrating spl(_, x_new, y_new; spl_kwargs..., return_spl = true) over x_new_edges gives the same masses as the original spline...
+
+    # Method
+    Constructs a system `A * yc = mc`, where:
+    - `m_total[i] = mc[i] * Δx[i]` is the total mass in cell `i`
+    - `A[i,j] = ∫ φ_j(x) dx` over cell `i`, where `φ_j(x)` is a spline that is 1 at `xc[j]` and
+    0 at all other centers `xc[k ≠ j]`.
+
+    This approximates the effect of a spline basis function at each center, builds the mass
+    conservation matrix, and solves the resulting linear system for the values `yc`.
+
+    # Notes
+    - This assumes `Dierckx.Spline1D` provides a usable approximation to a basis function by
+    fitting a spline through a unit vector. Because Dierckx splines are global and not
+    compactly supported, this method can be numerically unstable for large `k` or small `n`.
+    - For robust conservative remapping, a local B-spline basis (e.g. from BSplineKit.jl)
+    is recommended.
+
+
+    Note this can go off the rails in extrapolation, and at high orders.
+    It's also not that fast...
+    
+
+"""
+
+function conservative_spline_values(
+    xf::AbstractVector{FT},
+    mc::AbstractVector{FT2},
+    ;
+    bc::String = "error",
+    k::Int = 1,
+    method::Symbol = :Spline1D,
+    return_spl::Bool = false,
+    f_enhancement_factor::Union{Int, Nothing} = nothing,
+    f_p_enhancement_factor::Union{Int, Nothing} = nothing,
+    rtol = FT(1e-6),
+    enforce_positivity::Bool = false,
+    nnls_alg::Symbol = :fnnls,
+    A::Union{AbstractMatrix, Nothing} = nothing,
+    Af::Union{AbstractMatrix, Nothing} = nothing,
+) where {FT, FT2}
+
+    LinearAlgebra.BLAS.set_num_threads(1) # if you're on HPC this is essential to A\b not slowing down by 5 orders of magnitude from 1ms to 100s 
+
+    xc = FT(0.5) .* (xf[1:(end - 1)] .+ xf[2:end])
+
+    if isnothing(Af)
+        if isnothing(A)
+            n = length(mc)
+            A = zeros(FT, n, n)
+
+
+
+            for j in 1:n
+                ej = zeros(FT, n)
+                ej[j] = FT(1.0)
+                φj = pyinterp(
+                    xc, # we're not using the avlue
+                    xc,
+                    ej;
+                    k = k,
+                    bc = bc,
+                    method = :Spline1D,
+                    return_spl = true, # we want a spline out
+                    f_enhancement_factor = f_enhancement_factor,
+                    f_p_enhancement_factor = f_p_enhancement_factor,
+                )
+
+
+                if method == :Spline1D
+                    width = k + 1 # Support width of each spline basis fcn [ this should push us from quadratic n^2 to linear kn ]
+                    i_start = max(1, j - width)
+                    i_end = min(n, j + width)
+                    for i in i_start:i_end
+                        A[i, j] = Dierckx.integrate(φj, xf[i], xf[i + 1]) / (xf[i + 1] - xf[i]) # this is fast
+                    end
+                elseif method ∈ (:pchip, :pchip_smooth_derivative, :pchip_smooth)
+                    for i in 1:n
+                        A[i, j] =
+                            first(Integrals.QuadGK.quadgk(φj, xf[i], xf[i + 1]; rtol = rtol)) / (xf[i + 1] - xf[i]) # it could be anything so integrate (note this is very slow...)
+                    end
+                end
+            end
+        else
+            A = Af # just use the factorization if you have it
+        end
+    end
+
+    if enforce_positivity
+        yc = NonNegLeastSquares.nonneg_lsq(A, mc; alg = nnls_alg)[:] # Non-negative least square solver
+    else
+        yc = A \ mc # check 2nd run....
+        # @info "Conservative regridder: A = $A; mc = $mc; yc = $yc"
+    end
+    return xc, yc
+end
+
+
+function get_conservative_A(
+    xc::AbstractVector{FT};
+    bc::String = "error",
+    k::Int = 1,
+    method::Symbol = :Spline1D,
+    f_enhancement_factor::Union{Int, Nothing} = nothing,
+    f_p_enhancement_factor::Union{Int, Nothing} = nothing,
+) where {FT}
+
+
+    xf = FT[
+        xc[1] - (xc[2] - xc[1]) / 2,
+        (xc[1:(end - 1)] .+ (xc[2:end] - xc[1:(end - 1)]) / 2)...,
+        xc[end] + (xc[end] - xc[end - 1]) / 2,
+    ]
+
+    n = length(xc)
+    if FT <: Int
+        A = zeros(Float64, n, n) # probably cant factorize/integrate/transform in int... need a float.
+    else
+        A = zeros(FT, n, n)
+    end
+
+    for j in 1:n
+        ej = zeros(FT, n)
+        ej[j] = FT(1.0)
+        φj = pyinterp(
+            xc, # we're not using the avlue
+            xc,
+            ej;
+            k = k,
+            bc = bc,
+            method = :Spline1D,
+            return_spl = true, # we want a spline out
+            f_enhancement_factor = f_enhancement_factor,
+            f_p_enhancement_factor = f_p_enhancement_factor,
+        )
+
+
+        if method == :Spline1D
+            width = k + 1 # Support width of each spline basis fcn [ this should push us from quadratic n^2 to linear kn ]
+            i_start = max(1, j - width)
+            i_end = min(n, j + width)
+            for i in i_start:i_end
+                A[i, j] = Dierckx.integrate(φj, xf[i], xf[i + 1]) / (xf[i + 1] - xf[i]) # this is fast
+            end
+
+        elseif method ∈ (:pchip, :pchip_smooth_derivative, :pchip_smooth)
+            for i in 1:n
+                A[i, j] = first(Integrals.QuadGK.quadgk(φj, xf[i], xf[i + 1])) / (xf[i + 1] - xf[i]) # it could be anything so integrate (note this is very slow...)
+            end
+        end
+    end
+    return A
 end

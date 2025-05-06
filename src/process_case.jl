@@ -25,6 +25,7 @@ function process_case(
     use_LES_output_for_z::Bool = false,
     return_old_z::Bool = false,
     fail_on_missing_data::Bool = true,
+    conservative_interp::Bool = true,
 )
 
     # initial conditions
@@ -311,6 +312,37 @@ function process_case(
     z_dim_num_LES = get_dim_num("z", LES_data["RADQR"]) # assume it's same for all LES 2D vars?
     time_dim_num_LES = get_dim_num("time", LES_data["RADQR"])
 
+    ρ_LES = LES_data["RHO"] # 2D variable
+
+    # === Cache the mass response matrix for conservative interpolation === 
+    # remember to update the types if we ever bring back pchip etc)
+    A_cache = Dict{Tuple{Symbol, Int}, Array}() # cache for A matrices for the new grid. The grid is always the same we just need a version for each spline type. Recalculating the matrix involves integrals can be expensive so we avoid doing so... (we certainly don't want to be doing it at every t!)
+    Af_cache = Dict{Tuple{Symbol, Int}, Array}() # cache for A matrix factorization, Using the factorized matrix allows for a 3000-1000x speedup from just cacheing the A matrix.
+
+    if conservative_interp
+        # conservative interpolation is a bit more expensive, so we cache the A matrix for the Spline1D method
+        #= 
+            Calculate the A for k=1 order Spline. Note if you use pchip or something else, you should cache that spline.
+                It would be nice if the calls to get_data_new_z_t() could update a global cache but the cache shouldn't persist out side of this fcn, we'll just do it manually here
+        =#
+
+        A_cache[(:Spline1D, 1)] = get_conservative_A(new_z[:dTdt_rad]; method = :Spline1D, k = 1, bc = "extrapolate") # all the zs are the same, just take 1..
+        Af_cache[(:Spline1D, 1)] = LinearAlgebra.factorize(A_cache[(:Spline1D, 1)]) # storing the cache offers a 300-1000x speedup, since the factorization is the most expensive part...
+
+        # if we are doing conservativei interpolation, we need these, 
+        conservative_interp_kwargs = Dict{Symbol, Union{Bool, Symbol}}(
+            :preserve_monotonicity => true,
+            :enforce_positivity => false,
+            :nnls_alg => :fnnls,
+            :enforce_conservation => true,
+        )
+    else
+        conservative_interp_kwargs = Dict{Symbol, Union{Bool, Symbol}}()
+    end
+
+
+
+
     dTdt_rad = get_data_new_z_t_LES(
         dTdt_rad,
         new_z[:dTdt_rad],
@@ -322,9 +354,17 @@ function process_case(
         z_old = nothing,
         data = LES_data,
         initial_condition,
-    )[:]
+        conservative_interp = conservative_interp,
+        conservative_interp_kwargs = conservative_interp_kwargs,
+        weight = ρ_LES, # conservative sure but should it be mass weighted? T is intensive...
+        A = get(A_cache, (:Spline1D, 1), nothing),
+        Af = get(Af_cache, (:Spline1D, 1), nothing),
+    )[:]# interpolate conservatively and weight by density...
 
     # ======================================================================================================================== #
+
+
+    # by default we use conservative interpolation on all these, and weight by density... even though some are intensive variables... this will round corners etc and be slightly diffusive but...
 
     dTdt_hadv = get_data_new_z_t(
         dTdt_hadv,#.* (forcing_type == :ERA5_data),
@@ -336,6 +376,11 @@ function process_case(
         data = data[forcing_type],
         thermo_params,
         initial_condition,
+        conservative_interp = conservative_interp,
+        conservative_interp_kwargs = conservative_interp_kwargs,
+        weight = ρ,
+        A = get(A_cache, (:Spline1D, 1), nothing),
+        Af = get(Af_cache, (:Spline1D, 1), nothing),
     )[:]  # testing not using forcing_type for obs to see if fixes anything
 
     H_nudge = get_data_new_z_t(
@@ -354,6 +399,11 @@ function process_case(
             :f_enhancement_factor => 5, # higher to keep sharp inversions
             :f_p_enhancement_factor => 8,
         ),  # not too high to avoid cusps (changed to high to keep model fidelity)
+        conservative_interp = conservative_interp,
+        conservative_interp_kwargs = conservative_interp_kwargs,
+        weight = ρ,
+        A = get(A_cache, (:Spline1D, 1), nothing),
+        Af = get(Af_cache, (:Spline1D, 1), nothing),
     )[:]
 
     # dqtdt_hadv = get_data_new_z_t(dqtdt_hadv, new_z, z_dim_num,time_dim_num, flight_number; z_old = z_old[forcing_type], data=data[forcing_type], thermo_params,  initial_condition)
@@ -367,6 +417,11 @@ function process_case(
         data = data[forcing_type],
         thermo_params,
         initial_condition,
+        conservative_interp = conservative_interp,
+        conservative_interp_kwargs = conservative_interp_kwargs,
+        weight = ρ,
+        A = get(A_cache, (:Spline1D, 1), nothing),
+        Af = get(Af_cache, (:Spline1D, 1), nothing),
     )[:] # testing not using forcing_type for obs to see if fixes anything
 
     qt_nudge = get_data_new_z_t(
@@ -385,6 +440,11 @@ function process_case(
             :f_enhancement_factor => 6, # higher to keep sharp inversions
             :f_p_enhancement_factor => 8,
         ),  # not too high to avoid cusps
+        conservative_interp = conservative_interp,
+        conservative_interp_kwargs = conservative_interp_kwargs,
+        weight = ρ,
+        A = get(A_cache, (:Spline1D, 1), nothing),
+        Af = get(Af_cache, (:Spline1D, 1), nothing),
     )[:]
 
     subsidence = get_data_new_z_t(
@@ -403,6 +463,11 @@ function process_case(
             :f_enhancement_factor => 1, # lower for gentle changes and no sharp convergence/divergence, loss of accuracy ok
             :f_p_enhancement_factor => 1,
         ),  # lower for gentle changes and no sharp convergence/divergence, loss of accuraacy ok
+        conservative_interp = conservative_interp,
+        conservative_interp_kwargs = conservative_interp_kwargs,
+        weight = ρ,
+        A = get(A_cache, (:Spline1D, 1), nothing),
+        Af = get(Af_cache, (:Spline1D, 1), nothing),
     )[:]
 
     u_nudge = get_data_new_z_t(
@@ -415,6 +480,11 @@ function process_case(
         data = data[forcing_type],
         thermo_params,
         initial_condition,
+        conservative_interp = conservative_interp,
+        conservative_interp_kwargs = conservative_interp_kwargs,
+        weight = ρ,
+        A = get(A_cache, (:Spline1D, 1), nothing),
+        Af = get(Af_cache, (:Spline1D, 1), nothing),
     )[:]
 
     v_nudge = get_data_new_z_t(
@@ -427,6 +497,11 @@ function process_case(
         data = data[forcing_type],
         thermo_params,
         initial_condition,
+        conservative_interp = conservative_interp,
+        conservative_interp_kwargs = conservative_interp_kwargs,
+        weight = ρ,
+        A = get(A_cache, (:Spline1D, 1), nothing),
+        Af = get(Af_cache, (:Spline1D, 1), nothing),
     )[:]
 
     ug_nudge = get_data_new_z_t(
@@ -439,6 +514,11 @@ function process_case(
         data = data[forcing_type],
         thermo_params,
         initial_condition,
+        conservative_interp = conservative_interp,
+        conservative_interp_kwargs = conservative_interp_kwargs,
+        weight = ρ,
+        A = get(A_cache, (:Spline1D, 1), nothing),
+        Af = get(Af_cache, (:Spline1D, 1), nothing),
     )[:]
     vg_nudge = get_data_new_z_t(
         vg_nudge,
@@ -450,6 +530,11 @@ function process_case(
         data = data[forcing_type],
         thermo_params,
         initial_condition,
+        conservative_interp = conservative_interp,
+        conservative_interp_kwargs = conservative_interp_kwargs,
+        weight = ρ,
+        A = get(A_cache, (:Spline1D, 1), nothing),
+        Af = get(Af_cache, (:Spline1D, 1), nothing),
     )[:]
 
     return (; dTdt_hadv, H_nudge, dqtdt_hadv, qt_nudge, subsidence, u_nudge, v_nudge, ug_nudge, vg_nudge, dTdt_rad)

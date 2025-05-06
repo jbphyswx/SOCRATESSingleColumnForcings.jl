@@ -600,6 +600,8 @@ the function will create splines along interp_dim_in...
 - data_func is a func to be applied to the raw data before it is processed, though perhaps it it most useful if interp_dim_out is unset and we are returning functions...
 - vectorize_in means your input is an array and you need to loop over it too (as opposed to just being a fixed template vector)
 
+Note the conservative_regirdder() returns actual output arrays -- it won't work if you are just creating a spline fcn
+
 To Do : decide types
 """
 function interp_along_dim(
@@ -614,6 +616,10 @@ function interp_along_dim(
     verbose::Bool = false,
     interp_method::Symbol = :Spline1D,
     interp_kwargs::Dict = Dict{Symbol, Any}(),
+    conservative_interp::Bool = false,
+    conservative_interp_kwargs::Dict = Dict{Symbol, Any}(),
+    A::Union{Nothing, AbstractArray} = nothing,
+    Af::Union{Nothing, AbstractArray} = nothing,
 )
     # would use kwargs but doesn't play nice w/ ODE solver for some reason... instead we get out the parameters we want explicitly and pass them all the time (splatting gives a union typle type object that apparently can't be handled?)
     f_enhancement_factor = get(interp_kwargs, :f_enhancement_factor, 1) # default to 1.0
@@ -635,6 +641,14 @@ function interp_along_dim(
         vardata = data_func(vardata)
     end
 
+    if conservative_interp
+        interp_func =
+            (args...; kwargs...) ->
+                conservative_regridder(args...; A = A, Af = Af, conservative_interp_kwargs..., kwargs...)
+    else
+        interp_func = pyinterp
+    end
+
     # mapslices to apply along timedim, see https://docs.julialang.org/en/v1/base/arrays/#Base.mapslices
     if !interp_dim_in_is_full_array
         if isnothing(interp_dim_out)
@@ -647,7 +661,7 @@ function interp_along_dim(
                     k = k
                     # let block for performance of captured variables
                     d -> let d = d
-                        dd -> pyinterp(
+                        dd -> interp_func(
                             dd,
                             interp_dim_in,
                             d;
@@ -672,7 +686,7 @@ function interp_along_dim(
                     bc = bc,
                     k = k
                     # let block for performance of captured variables
-                    d -> pyinterp(
+                    d -> interp_func(
                         interp_dim_out,
                         interp_dim_in,
                         d;
@@ -701,7 +715,7 @@ function interp_along_dim(
                         k = k
                         # let block for performance of captured variables
                         d -> let d = d
-                            dd -> pyinterp(
+                            dd -> interp_func(
                                 dd,
                                 d[:, 1],
                                 d[:, 2];
@@ -728,7 +742,7 @@ function interp_along_dim(
                         bc = bc,
                         k = k
                         # let block for performance of captured variables
-                        d -> pyinterp(
+                        d -> interp_func(
                             interp_dim_out,
                             d[:, 1],
                             d[:, 2];
@@ -787,6 +801,11 @@ function var_to_new_coord(
     data_func::Union{Function, Nothing} = nothing,
     interp_method::Symbol = :Spline1D,
     interp_kwargs::Dict = Dict{Symbol, Any}(),
+    conservative_interp::Bool = false,
+    conservative_interp_kwargs::Dict = Dict{Symbol, Any}(),
+    weight = nothing, # for extensive variables and for conservative regridding, you may wish to weight by something like density when interpolating in z...
+    A::Union{Nothing, AbstractArray} = nothing, # for extensive variables and for conservative regridding, you may wish to weight by something like density when interpolating in z...
+    Af::Union{Nothing, AbstractArray} = nothing, # for extensive variables and for conservative regridding, you may wish to weight by something like density when interpolating in z...
 )
     vardata = isa(var, String) ? data[var] : var
     if ~isnothing(data)
@@ -796,17 +815,57 @@ function var_to_new_coord(
     end
 
     # evaluate interp_dim_in_is_full_array based on the size of the input... interp_dim_in is full array false is much faster cause dont have to double loop in vectorization...
-    return interp_along_dim(
-        vardata,
-        interp_dim,
-        coord_in;
-        interp_dim_out = coord_new,
-        data = data,
-        data_func = data_func,
-        interp_dim_in_is_full_array = (size(coord_in) == size(vardata)),
-        interp_method = interp_method,
-        interp_kwargs = interp_kwargs,
-    )
+
+    if isnothing(weight) # if weight is a number, we assume it's a scalar and we don't need to do anything
+        return interp_along_dim(
+            vardata,
+            interp_dim,
+            coord_in;
+            interp_dim_out = coord_new,
+            data = data,
+            data_func = data_func,
+            interp_dim_in_is_full_array = (size(coord_in) == size(vardata)),
+            interp_method = interp_method,
+            interp_kwargs = interp_kwargs,
+            conservative_interp = conservative_interp,
+            conservative_interp_kwargs = conservative_interp_kwargs,
+            A = A,
+            Af = Af,
+        )
+
+    else
+
+        return interp_along_dim(
+            vardata .* weight,
+            interp_dim,
+            coord_in;
+            interp_dim_out = coord_new,
+            data = data,
+            data_func = data_func,
+            interp_dim_in_is_full_array = (size(coord_in) == size(vardata)),
+            interp_method = interp_method,
+            interp_kwargs = interp_kwargs,
+            conservative_interp = conservative_interp,
+            conservative_interp_kwargs = conservative_interp_kwargs,
+            A = A,
+            Af = Af,
+        ) ./ interp_along_dim(
+            weight,
+            interp_dim,
+            coord_in;
+            interp_dim_out = coord_new,
+            data = data,
+            data_func = data_func,
+            interp_dim_in_is_full_array = (size(coord_in) == size(vardata)),
+            interp_method = interp_method,
+            interp_kwargs = interp_kwargs,
+            conservative_interp = conservative_interp,
+            conservative_interp_kwargs = conservative_interp_kwargs,
+            A = A,
+            Af = Af,
+        )
+
+    end
 end
 
 
@@ -833,7 +892,83 @@ function get_data_new_z_t(
     Spline1D_interp_kwargs::Dict = Dict{Symbol, Any}(),
     pchip_interp_kwargs::Dict = Dict{Symbol, Any}(),
     ground_indices = :end,
+    conservative_interp::Bool = false,
+    conservative_interp_kwargs::Dict = Dict{Symbol, Any}(),
+    weight = nothing, # for extensive variables and for conservative regridding, you may wish to weight by something like density when interpolating in z...
+    weightg = nothing, # for extensive variables and for conservative regridding, you may wish to weight by something like density when interpolating in z...
+    return_before_interp::Bool = false,
+    A::Union{Nothing, AbstractArray} = nothing,
+    Af::Union{Nothing, AbstractArray} = nothing,
 )
+
+    if conservative_interp && isnothing(A)
+        LinearAlgebra.BLAS.set_num_threads(1) # if you're on HPC this is essential to A\b not slowing down by 5 orders of magnitude from 1ms to 100s 
+        if interp_method ∈ [:Spline1D, :Dierckx]
+            A = get_conservative_A(z_new; method = interp_method, Spline1D_interp_kwargs...)
+            Af = LinearAlgebra.factorize(A)
+        elseif interp_method ∈ [:Pchip]
+            A = get_conservative_A(z_new; method = interp_method, pchip_interp_kwargs...)
+            Af = LinearAlgebra.factorize(A)
+        else
+            error("unsupported interpolation method $(interp_method) for conservative regridding")
+        end
+    end
+
+
+    # do the same processing to the weights and shortcircuit the return w/ return_before_interp
+    if !isnothing(weight)
+        if !isnothing(weightg)
+            weight = get_data_new_z_t(
+                weight,
+                z_new,
+                z_dim,
+                time_dim,
+                flight_number;
+                weight = nothing,
+                weightg = nothing,
+                varg = weightg,
+                return_before_interp = true,
+                thermo_params = thermo_params,
+                z_old = z_old,
+                t_old = t_old,
+                data = data,
+                initial_condition = initial_condition,
+                assume_monotonic = assume_monotonic,
+                interp_method = interp_method,
+                Spline1D_interp_kwargs = Spline1D_interp_kwargs,
+                pchip_interp_kwargs = pchip_interp_kwargs,
+                conservative_interp = conservative_interp,
+                conservative_interp_kwargs = conservative_interp_kwargs,
+                A = A,
+                Af = Af,
+            )
+        else
+            weight = get_data_new_z_t(
+                weight,
+                z_new,
+                z_dim,
+                time_dim,
+                flight_number;
+                weight = nothing,
+                weightg = nothing,
+                varg = nothing,
+                return_before_interp = true,
+                thermo_params = thermo_params,
+                z_old = z_old,
+                t_old = t_old,
+                data = data,
+                initial_condition = initial_condition,
+                assume_monotonic = assume_monotonic,
+                interp_method = interp_method,
+                Spline1D_interp_kwargs = Spline1D_interp_kwargs,
+                pchip_interp_kwargs = pchip_interp_kwargs,
+                conservative_interp = conservative_interp,
+                conservative_interp_kwargs = conservative_interp_kwargs,
+                A = A,
+                Af = Af,
+            )
+        end
+    end
 
     # get the data and dimensions we're working on,
     vardata = isa(var, String) ? data[var] : var
@@ -892,6 +1027,12 @@ function get_data_new_z_t(
     z_old = reverse(z_old; dims = z_dim_num)
     vardata = reverse(vardata; dims = z_dim_num)
 
+    if return_before_interp
+        return vardata
+    end
+
+
+
     # interpolate to new z
     if interp_method ∈ [:Spline1D, :Dierckx]
         vardata = var_to_new_coord(
@@ -902,6 +1043,11 @@ function get_data_new_z_t(
             data = data,
             interp_method = interp_method,
             interp_kwargs = Spline1D_interp_kwargs,
+            conservative_interp = conservative_interp,
+            conservative_interp_kwargs = conservative_interp_kwargs,
+            weight = weight,
+            A = A,
+            Af = Af,
         )
     elseif interp_method ∈ [:pchip_smooth_derivative, :pchip_smooth]
         vardata = var_to_new_coord(
@@ -912,6 +1058,11 @@ function get_data_new_z_t(
             data = data,
             interp_method = interp_method,
             interp_kwargs = pchip_interp_kwargs,
+            conservative_interp = conservative_interp,
+            conservative_interp_kwargs = conservative_interp_kwargs,
+            weight = weight,
+            A = A,
+            Af = Af,
         )
     else
         error("unsupported interpolation method")
@@ -932,6 +1083,7 @@ function get_data_new_z_t(
         data = data,
         interp_method = :Spline1D, # in time, we're gonna stick to linear interpolation for now... this one maybe can be pchip since it's all within the data bounds? idk... i was getting w=0 using pchip... possibly because
         interp_kwargs = Spline1D_interp_kwargs,
+        conservative_interp = false, # no need for conservation in time? maybe?
     )
 
     return vardata
