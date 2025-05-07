@@ -1,7 +1,7 @@
 using ForwardDiff: ForwardDiff
 using PCHIPInterpolation: PCHIPInterpolation
 using Dierckx: Dierckx, Spline1D
-using Integrals: Integrals
+# using Integrals: Integrals
 using NonNegLeastSquares: NonNegLeastSquares, nonneg_lsq
 
 
@@ -231,11 +231,15 @@ function conservative_regridder(
             y[i] = Dierckx.integrate(spl, x_edges[i], x_edges[i + 1]) / (x_edges[i + 1] - x_edges[i])
         elseif method ∈ (:pchip, :pchip_smooth_derivative, :pchip_smooth)
             # we don't have a good way to interpolate the pchip output fcn bc it's piecewise, so we integrate it numerically
-            y[i] =
-                Integrals.solve(
-                    Integrals.IntegralProblem((x, p) -> spl(x), (x_edges[i], x_edges[i + 1])),
-                    Integrals.QuadGKJL(),
-                ).u / (x_edges[i + 1] - x_edges[i])
+            # y[i] =
+            #     Integrals.solve(
+            #         Integrals.IntegralProblem((x, p) -> spl(x), (x_edges[i], x_edges[i + 1])),
+            #         Integrals.QuadGKJL(),
+            #     ).u / (x_edges[i + 1] - x_edges[i])
+            # Remove dependence on Integrals for compat reasons with SciML (overly restrictive between Integrals 3 and 4). raise error
+            error(
+                "Conservative interpolation not yet supported for pchip due to compatibility issues with Integrals.jl vs 3.9, and 4.0, and other SciML packages like DiffEqBase.jl. Consider creating a version that relies on analytical solutions for extrapolation and pchip's integrate method inside.",
+            )
         else
             error("method not recognized")
         end
@@ -301,11 +305,14 @@ function conservative_regridder(
                     # we can't really do much here, maybe y is supposed to be nonzero but sum to zero, maybe not... who knows
                 end
             elseif method ∈ (:pchip, :pchip_smooth_derivative, :pchip_smooth)
-                total =
-                    Integrals.solve(
-                        Integrals.IntegralProblem((x, p) -> spl(x), (x_edges[1], x_edges[end])),
-                        Integrals.QuadGKJL(),
-                    ).u
+                # total =
+                #     Integrals.solve(
+                #         Integrals.IntegralProblem((x, p) -> spl(x), (x_edges[1], x_edges[end])),
+                #         Integrals.QuadGKJL(),
+                #     ).u
+                error(
+                    "Conservative interpolation not yet supported for pchip due to compatibility issues with Integrals.jl vs 3.9, and 4.0, and other SciML packages like DiffEqBase.jl. Consider creating a version that relies on analytical solutions for extrapolation and pchip's integrate method inside.",
+                )
                 if !iszero(total)
                     y *= Dierckx.integrate(spl, x_edges[1], x_edges[end]) / total # this is the total mass of the original data
                 else
@@ -418,10 +425,13 @@ function conservative_spline_values(
                         A[i, j] = Dierckx.integrate(φj, xf[i], xf[i + 1]) / (xf[i + 1] - xf[i]) # this is fast
                     end
                 elseif method ∈ (:pchip, :pchip_smooth_derivative, :pchip_smooth)
-                    for i in 1:n
-                        A[i, j] =
-                            first(Integrals.QuadGK.quadgk(φj, xf[i], xf[i + 1]; rtol = rtol)) / (xf[i + 1] - xf[i]) # it could be anything so integrate (note this is very slow...)
-                    end
+                    # for i in 1:n
+                    #     A[i, j] =
+                    #         first(Integrals.QuadGK.quadgk(φj, xf[i], xf[i + 1]; rtol = rtol)) / (xf[i + 1] - xf[i]) # it could be anything so integrate (note this is very slow...)
+                    # end
+                    error(
+                        "Conservative interpolation not yet supported for pchip due to compatibility issues with Integrals.jl vs 3.9, and 4.0, and other SciML packages like DiffEqBase.jl. Consider creating a version that relies on analytical solutions for extrapolation and pchip's integrate method inside.",
+                    )
                 end
             end
         else
@@ -487,9 +497,12 @@ function get_conservative_A(
             end
 
         elseif method ∈ (:pchip, :pchip_smooth_derivative, :pchip_smooth)
-            for i in 1:n
-                A[i, j] = first(Integrals.QuadGK.quadgk(φj, xf[i], xf[i + 1])) / (xf[i + 1] - xf[i]) # it could be anything so integrate (note this is very slow...)
-            end
+            # for i in 1:n
+            #     A[i, j] = first(Integrals.QuadGK.quadgk(φj, xf[i], xf[i + 1])) / (xf[i + 1] - xf[i]) # it could be anything so integrate (note this is very slow...)
+            # end
+            error(
+                "Conservative interpolation not yet supported for pchip due to compatibility issues with Integrals.jl vs 3.9, and 4.0, and other SciML packages like DiffEqBase.jl. Consider creating a version that relies on analytical solutions for extrapolation and pchip's integrate method inside.",
+            )
         end
     end
     return A
