@@ -65,6 +65,8 @@ import Thermodynamics.Parameters as TDP
         return_old_z,
         conservative_interp = setup
         data = SSCF.open_atlas_les_input(flight_number, forcing_type; open_files = false)
+        conservative_interp_kwargs = SSCF.get_conservative_interp_kwargs(;)
+
         # check files all exist
         # if isfile(data[forcing_type]) && isfile(data[:grid_data])
         if (!isnothing(data[forcing_type]) && isfile(data[forcing_type])) &&
@@ -78,7 +80,7 @@ import Thermodynamics.Parameters as TDP
                 surface = surface,
                 use_LES_output_for_z = use_LES_output_for_z,
                 return_old_z = return_old_z,
-                conservative_interp = conservative_interp,
+                conservative_interp_kwargs = conservative_interp_kwargs,
                 fail_on_missing_data = false,
             )
             @test true # if no error, test passes

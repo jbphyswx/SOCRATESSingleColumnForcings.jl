@@ -29,7 +29,7 @@ function get_data_new_z_t_LES(
     pchip_interp_kwargs::Dict = Dict{Symbol, Any}(:bc => "extrapolate"),
     ground_indices = :end,
     conservative_interp::Bool = false,
-    conservative_interp_kwargs::Dict = Dict{Symbol, Any}(),
+    conservative_interp_kwargs::DCIKT = default_conservative_interp_kwargs,
     weight = nothing, # for extensive variables and for conservative regridding, you may wish to weight by something like density when interpolating in z...
     weightg = nothing, # for extensive variables and for conservative regridding, you may wish to weight by something like density when interpolating in z...
     return_before_interp::Bool = false,

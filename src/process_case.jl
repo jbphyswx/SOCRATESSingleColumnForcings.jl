@@ -1,4 +1,5 @@
 
+
 """
     process_case(
         flight_number::Int;
@@ -14,6 +15,7 @@ If new_z is not specified, will use Rachel Atlas default grid
 If initial_condition is false, returns the data at time 0, if true, returns full spline interpolations over the time dimension
 
 Some things are always forced by ERA5, otherwise we pull from whatever forcing_type specifies... (list which is which?)
+
 """
 function process_case(
     flight_number::Int;
@@ -26,6 +28,7 @@ function process_case(
     return_old_z::Bool = false,
     fail_on_missing_data::Bool = true,
     conservative_interp::Bool = true,
+    conservative_interp_kwargs::DCIKT = default_conservative_interp_kwargs,
 )
 
     # initial conditions
@@ -329,15 +332,6 @@ function process_case(
         A_cache[(:Spline1D, 1)] = get_conservative_A(new_z[:dTdt_rad]; method = :Spline1D, k = 1, bc = "extrapolate") # all the zs are the same, just take 1..
         Af_cache[(:Spline1D, 1)] = LinearAlgebra.factorize(A_cache[(:Spline1D, 1)]) # storing the cache offers a 300-1000x speedup, since the factorization is the most expensive part...
 
-        # if we are doing conservativei interpolation, we need these, 
-        conservative_interp_kwargs = Dict{Symbol, Union{Bool, Symbol}}(
-            :preserve_monotonicity => true,
-            :enforce_positivity => false,
-            :nnls_alg => :fnnls,
-            :enforce_conservation => true,
-        )
-    else
-        conservative_interp_kwargs = Dict{Symbol, Union{Bool, Symbol}}()
     end
 
 

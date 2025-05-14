@@ -617,7 +617,7 @@ function interp_along_dim(
     interp_method::Symbol = :Spline1D,
     interp_kwargs::Dict = Dict{Symbol, Any}(),
     conservative_interp::Bool = false,
-    conservative_interp_kwargs::Dict = Dict{Symbol, Any}(),
+    conservative_interp_kwargs::DCIKT = default_conservative_interp_kwargs,
     A::Union{Nothing, AbstractArray} = nothing,
     Af::Union{Nothing, AbstractArray} = nothing,
 )
@@ -802,7 +802,7 @@ function var_to_new_coord(
     interp_method::Symbol = :Spline1D,
     interp_kwargs::Dict = Dict{Symbol, Any}(),
     conservative_interp::Bool = false,
-    conservative_interp_kwargs::Dict = Dict{Symbol, Any}(),
+    conservative_interp_kwargs::DCIKT = default_conservative_interp_kwargs,
     weight = nothing, # for extensive variables and for conservative regridding, you may wish to weight by something like density when interpolating in z...
     A::Union{Nothing, AbstractArray} = nothing, # for extensive variables and for conservative regridding, you may wish to weight by something like density when interpolating in z...
     Af::Union{Nothing, AbstractArray} = nothing, # for extensive variables and for conservative regridding, you may wish to weight by something like density when interpolating in z...
@@ -893,7 +893,7 @@ function get_data_new_z_t(
     pchip_interp_kwargs::Dict = Dict{Symbol, Any}(),
     ground_indices = :end,
     conservative_interp::Bool = false,
-    conservative_interp_kwargs::Dict = Dict{Symbol, Any}(),
+    conservative_interp_kwargs::DCIKT = default_conservative_interp_kwargs,
     weight = nothing, # for extensive variables and for conservative regridding, you may wish to weight by something like density when interpolating in z...
     weightg = nothing, # for extensive variables and for conservative regridding, you may wish to weight by something like density when interpolating in z...
     return_before_interp::Bool = false,

@@ -423,6 +423,10 @@ function conservative_spline_values(
                     i_end = min(n, j + width)
                     for i in i_start:i_end
                         A[i, j] = Dierckx.integrate(φj, xf[i], xf[i + 1]) / (xf[i + 1] - xf[i]) # this is fast
+                        if !isfinite(A[i, j])
+                            # @error("A[$i, $j] = $(A[i, j]); from inputs xf = $xf; mc = $mc; bc = $bc; k = $k; φj = $φj; xf[i] = $(xf[i]); xf[i+1] = $(xf[i+1])")
+                            A[i, j] = FT(0.0) # is this ok?
+                        end
                     end
                 elseif method ∈ (:pchip, :pchip_smooth_derivative, :pchip_smooth)
                     # for i in 1:n
@@ -444,6 +448,12 @@ function conservative_spline_values(
     else
         yc = A \ mc # check 2nd run....
         # @info "Conservative regridder: A = $A; mc = $mc; yc = $yc"
+    end
+
+    if any(isnan, yc)
+        # @error("NaN values in yc from inputs: xf = $xf; mc = $mc; bc = $b; A = $A; k = $k; return_spl = $return_spl; enforce_positivity = $enforce_positivity; nnls_alg = $nnls_alg")
+        # set NaNs to zero  (is this good> we seemed to get from very very small numbers but idk..., like 1e-300
+        yc = resolve_nan.(yc, zero(eltype(yc)))
     end
     return xc, yc
 end
