@@ -624,7 +624,11 @@ function interp_along_dim(
     # would use kwargs but doesn't play nice w/ ODE solver for some reason... instead we get out the parameters we want explicitly and pass them all the time (splatting gives a union typle type object that apparently can't be handled?)
     f_enhancement_factor = get(interp_kwargs, :f_enhancement_factor, 1) # default to 1.0
     f_p_enhancement_factor = get(interp_kwargs, :f_p_enhancement_factor, 1) # default to 1.0
-    bc = get(interp_kwargs, :bc, "error") # default to nearest
+    if conservative_interp
+        bc = get(interp_kwargs, :bc, "extrapolate") # default to extrapolate
+    else
+        bc = get(interp_kwargs, :bc, "error") # default to error
+    end
     k = get(interp_kwargs, :k, 1) # default to 3
 
 

@@ -182,7 +182,7 @@ function conservative_regridder(
     x::AbstractVector,
     xp::AbstractVector,
     yp::AbstractVector;
-    bc::String = "error",
+    bc::String = "extrapolate", # must be extrapolate to integrate outside the knots (boundary of the data)... Dierckx integral ignored silently, we use dierckx_safe_integrate() instead
     k::Int = 1,
     method::Symbol = :Spline1D,
     f_enhancement_factor::Union{Int, Nothing} = nothing,
@@ -228,7 +228,7 @@ function conservative_regridder(
         # integrate over the area of influence
 
         if method == :Spline1D
-            y[i] = Dierckx.integrate(spl, x_edges[i], x_edges[i + 1]) / (x_edges[i + 1] - x_edges[i])
+            y[i] = dierckx_safe_integrate(spl, x_edges[i], x_edges[i + 1]; bc = bc) / (x_edges[i + 1] - x_edges[i])
         elseif method ∈ (:pchip, :pchip_smooth_derivative, :pchip_smooth)
             # we don't have a good way to interpolate the pchip output fcn bc it's piecewise, so we integrate it numerically
             # y[i] =
@@ -298,9 +298,10 @@ function conservative_regridder(
         # inversion can be leaky, resolve if asked (:integrate is by definition not leaky since it's just the original integral of the spline.)
         if enforce_conservation
             if method == :Spline1D
-                total = Dierckx.integrate(Dierckx.Spline1D(x, y; k = k, bc = bc), x_edges[1], x_edges[end])
+                total =
+                    dierckx_safe_integrate(Dierckx.Spline1D(x, y; k = k, bc = bc), x_edges[1], x_edges[end]; bc = bc)
                 if !iszero(total)
-                    y *= Dierckx.integrate(spl, x_edges[1], x_edges[end]) / total # this is the total mass of the original data
+                    y *= dierckx_safe_integrate(spl, x_edges[1], x_edges[end]; bc = bc) / total # this is the total mass of the original data
                 else
                     # we can't really do much here, maybe y is supposed to be nonzero but sum to zero, maybe not... who knows
                 end
@@ -314,7 +315,7 @@ function conservative_regridder(
                     "Conservative interpolation not yet supported for pchip due to compatibility issues with Integrals.jl vs 3.9, and 4.0, and other SciML packages like DiffEqBase.jl. Consider creating a version that relies on analytical solutions for extrapolation and pchip's integrate method inside.",
                 )
                 if !iszero(total)
-                    y *= Dierckx.integrate(spl, x_edges[1], x_edges[end]) / total # this is the total mass of the original data
+                    y *= dierckx_safe_integrate(spl, x_edges[1], x_edges[end]; bc = bc) / total # this is the total mass of the original data
                 else
                     # we can't really do much here, maybe y is supposed to be nonzero but sum to zero, maybe not... who knows
                 end
@@ -377,7 +378,7 @@ function conservative_spline_values(
     xf::AbstractVector{FT},
     mc::AbstractVector{FT2},
     ;
-    bc::String = "error",
+    bc::String = "extrapolate",
     k::Int = 1,
     method::Symbol = :Spline1D,
     return_spl::Bool = false,
@@ -422,7 +423,7 @@ function conservative_spline_values(
                     i_start = max(1, j - width)
                     i_end = min(n, j + width)
                     for i in i_start:i_end
-                        A[i, j] = Dierckx.integrate(φj, xf[i], xf[i + 1]) / (xf[i + 1] - xf[i]) # this is fast
+                        A[i, j] = dierckx_safe_integrate(φj, xf[i], xf[i + 1]; bc = bc) / (xf[i + 1] - xf[i]) # this is fast
                         if !isfinite(A[i, j])
                             # @error("A[$i, $j] = $(A[i, j]); from inputs xf = $xf; mc = $mc; bc = $bc; k = $k; φj = $φj; xf[i] = $(xf[i]); xf[i+1] = $(xf[i+1])")
                             A[i, j] = FT(0.0) # is this ok?
@@ -461,7 +462,7 @@ end
 
 function get_conservative_A(
     xc::AbstractVector{FT};
-    bc::String = "error",
+    bc::String = "extrapolate",
     k::Int = 1,
     method::Symbol = :Spline1D,
     f_enhancement_factor::Union{Int, Nothing} = nothing,
@@ -503,7 +504,7 @@ function get_conservative_A(
             i_start = max(1, j - width)
             i_end = min(n, j + width)
             for i in i_start:i_end
-                A[i, j] = Dierckx.integrate(φj, xf[i], xf[i + 1]) / (xf[i + 1] - xf[i]) # this is fast
+                A[i, j] = dierckx_safe_integrate(φj, xf[i], xf[i + 1]; bc = bc) / (xf[i + 1] - xf[i]) # this is fast
             end
 
         elseif method ∈ (:pchip, :pchip_smooth_derivative, :pchip_smooth)
@@ -516,4 +517,141 @@ function get_conservative_A(
         end
     end
     return A
+end
+
+
+
+
+
+
+
+"""
+rn Dierckx doesn't respect boundary conditions mode (extrapolate, nearest etc) when integrating, so we have to do it ourselves.
+"""
+function dierckx_safe_integrate(spl::Dierckx.Spline1D, x1::FT, x2::FT, ; bc::String = "extrapolate") where {FT}
+
+    y = FT(0)
+
+    xp = FT.(extrema(spl.t)) # the outer knots define the end of the spline... this may or may not be the end of the data.
+    yp = FT.(spl.(xp)) # the values at the knots
+
+
+    spl_part = nothing
+    bc_parts = nothing
+    xbs = nothing
+    fxbs = nothing
+    dfdxbs = Nothing
+    if (x2 < xp[1])  # were completely below
+        spl_part = nothing
+        bc_parts = ((x1, x2),)
+
+        xbs = (xp[1],)
+        fxbs = (yp[1],)
+        if bc == "extrapolate"
+            dfdxbs = (Dierckx.derivative(spl, xp[1]),)
+        elseif bc == "error"
+            error("x2 < xp[1] and bc = $bc, this is not allowed")
+        end
+
+    elseif (x1 ≤ xp[1]) && (xp[1] ≤ x2 ≤ xp[end]) # we're only partially outside the bounds of the data
+        bc_parts = ((x1, xp[1]),)
+        spl_part = (xp[1], x2)
+
+        xbs = (xp[1],)
+        fxbs = (yp[1],)
+        if bc == "extrapolate"
+            dfdxbs = (Dierckx.derivative(spl, xp[1]),)
+        elseif (bc == "error") && (x1 < xp[1])
+            error("x1 < xp[1] and bc = $bc, this is not allowed")
+        end
+
+    elseif (xp[1] ≤ x1) && (x2 ≤ xp[end]) # were completely inside the bounds of the data
+        spl_part = (x1, x2)
+        bc_parts = nothing
+        return Dierckx.integrate(spl, x1, x2) # short circuit
+
+    elseif (xp[1] ≤ x1 ≤ xp[end]) && (xp[end] ≤ x2) # we're only partially outside the bounds of the data
+        spl_part = (x1, xp[end])
+        bc_parts = ((xp[end], x2),)
+
+        xbs = (xp[end],)
+        fxbs = (yp[end],)
+        if bc == "extrapolate"
+            dfdxbs = (Dierckx.derivative(spl, xp[end]),)
+        elseif (bc == "error") && (x2 > xp[end])
+            error("x2 > xp[end] and bc = $bc, this is not allowed")
+        end
+
+    elseif (xp[end] < x1) # were completely above the bounds of the data
+        bc_parts = ((x1, x2),)
+        spl_part = nothing
+
+        xbs = (xp[end],)
+        fxbs = (yp[end],)
+        if bc == "extrapolate"
+            dfdxbs = (Dierckx.derivative(spl, xp[end]),)
+        elseif (bc == "error")
+            error("x1 > xp[end] and bc = $bc, this is not allowed")
+        end
+
+
+    elseif (x1 < xp[1]) && (xp[end] < x2) # we completely surround the data
+
+        xbs = (xp[1], xp[end])
+        fxbs = (yp[1], yp[end])
+
+        spl_part = (xp[1], xp[end])
+        bc_parts = ((x1, xp[1]), (xp[end], x2))
+
+        if bc == "extrapolate"
+            dfdxbs = (Dierckx.derivative(spl, xp[1]), Dierckx.derivative(spl, xp[end]))
+        elseif bc == "error"
+            error("x1 < xp[1] and x2 > xp[end] and bc = $bc, this is not allowed")
+        end
+
+    else
+        error("Something went wrong with the interpolation")
+
+    end
+
+    if !isnothing(spl_part)
+        y += Dierckx.integrate(spl, spl_part[1], spl_part[2])
+    end
+
+    if !isnothing(bc_parts)
+        for (j, bc_part) in enumerate(bc_parts)
+            a, b = bc_part
+            if bc == "nearest"
+                # This is just a constant "
+
+                y += fxbs[j] * (b - a)
+            elseif bc == "extrapolate"
+                # calculate the integral using derivative and values at the edge
+                #=
+                    Approximate f(x) using a linear expansion around a known point xb:
+                        f(x) ≈ fxb + dfdxb * (x - xb)
+                        where:
+                            f(xb) = fxb
+                            f'(xb) = dfdxb
+
+                    Then the antiderivative y(x) = ∫ f(x) dx is:
+                        y(x) = fxb * (x - xb) + (dfdxb / 2) * (x - xb)^2
+
+                    To compute the integral of f(x) over the interval (a, b) = (bc_part[1], bc_part[2]):
+                        ∫[a to b] f(x) dx ≈ [fxb * (x - xb) + (dfdxb / 2) * (x - xb)^2] evaluated from x = a to x = b
+
+                        So:
+                        ∫[a to b] f(x) dx ≈ [fxb*(b - xb) + (dfdxb/2)*(b - xb)^2] - [fxb*(a - xb) + (dfdxb/2)*(a - xb)^2]
+                                        = fxb * (b - a) + (dfdxb / 2) * [ (b - xb)^2 - (a - xb)^2 ]
+                        The average is just all that divided by (b - a)
+                =#
+                y += (fxbs[j] * (b - a) + (dfdxbs[j] / 2) * ((b - xbs[j])^2 - (a - xbs[j])^2))
+
+                # elseif bc == "zero"
+                #     # do nothing
+            end
+        end
+    end
+
+    return y
 end
