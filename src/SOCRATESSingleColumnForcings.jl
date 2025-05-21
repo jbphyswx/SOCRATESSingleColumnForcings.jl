@@ -31,12 +31,13 @@ const default_conservative_interp_kwargs = (;
     preserve_monotonicity = true,
     enforce_positivity = false,
     nnls_alg = :fnnls,
+    nnls_tol = FT(1e-8), # default for package
     enforce_conservation = true,
     integrate_method = :invert,
 )
 
 const DCIKT = typeof(default_conservative_interp_kwargs)
-const DCIKDT = Dict{Symbol, Union{Bool, Symbol}} # Dict for conservative interpolation kwargs
+const DCIKDT = Dict{Symbol, Union{Bool, Symbol, FT}} # Dict for conservative interpolation kwargs
 const default_conservative_interp_kwargs_dict = DCIKDT(pairs(default_conservative_interp_kwargs))
 
 get_conservative_interp_kwargs(::Nothing) = default_conservative_interp_kwargs

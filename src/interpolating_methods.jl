@@ -192,6 +192,7 @@ function conservative_regridder(
     preserve_monotonicity::Bool = false,
     enforce_positivity::Bool = false,
     nnls_alg::Symbol = :fnnls,
+    nnls_tol = FT(1e-8),
     enforce_conservation::Bool = true,
     A::Union{AbstractMatrix, Nothing} = nothing,
     Af::Union{AbstractMatrix, Nothing} = nothing,
@@ -260,6 +261,14 @@ function conservative_regridder(
         # spline_orig = spl
         # mc_avg = [first(Integrals.QuadGK.quadgk(spline_orig, xf[i], xf[i+1])) / Δx[i] for i in eachindex(Δx)]
 
+        if enforce_positivity
+            y_mean = mean(y)
+            if (0 < y_mean < 1) # i think too large is fine, ignore small numbers, but bypass if mean is 0.
+                # I think things start to break down around 2* eps(FT)^0.5, but we'll bring everything small up to 1 to be sure...
+                y /= y_mean # we just scale up to 1, that should be fine, if the data has a huge range maybe something breaks but that's not a good fit for regridding like this anyway... [ maybe *= inv(y_mean) is faster?]
+            end
+        end
+
         _, y = conservative_spline_values(
             x_edges,
             y;
@@ -271,9 +280,14 @@ function conservative_regridder(
             rtol = rtol,
             enforce_positivity = enforce_positivity,
             nnls_alg = nnls_alg,
+            nnls_tol = nnls_tol,
             A = A,
             Af = Af,
         ) # this is the new y values that will yield the same mass as the original spline
+
+        if enforce_positivity && (0 < y_mean < 1)
+            y *= y_mean
+        end
 
         if preserve_monotonicity # ensure our new values are within the bounds of their adjacent points in the original grid
             for i in 1:(length(x))
@@ -387,6 +401,7 @@ function conservative_spline_values(
     rtol = FT(1e-6),
     enforce_positivity::Bool = false,
     nnls_alg::Symbol = :fnnls,
+    nnls_tol = FT(1e-8),
     A::Union{AbstractMatrix, Nothing} = nothing,
     Af::Union{AbstractMatrix, Nothing} = nothing,
 ) where {FT, FT2}
@@ -445,14 +460,19 @@ function conservative_spline_values(
     end
 
     if enforce_positivity
-        yc = NonNegLeastSquares.nonneg_lsq(A, mc; alg = nnls_alg)[:] # Non-negative least square solver
+        if 0 < mean(mc) < (2 * eps(FT)^0.5)
+            @warn "mean(mc) = $(mean(mc)) < [2 * eps($FT)^0.5 = $(2 * eps(FT)^0.5)]; this is very small, NNLS may arbitarily converge to 0. Consider scaling your data to be larger."
+        end
+        yc = NonNegLeastSquares.nonneg_lsq(A, mc; alg = nnls_alg, tol = nnls_tol)[:] # Non-negative least square solver
     else
         yc = A \ mc # check 2nd run....
         # @info "Conservative regridder: A = $A; mc = $mc; yc = $yc"
     end
 
-    if any(isnan, yc)
-        # @error("NaN values in yc from inputs: xf = $xf; mc = $mc; bc = $b; A = $A; k = $k; return_spl = $return_spl; enforce_positivity = $enforce_positivity; nnls_alg = $nnls_alg")
+    if any(!isfinite, mc)
+        error("Received invalid (non-finite) input in mc = $mc")
+    elseif any(!isfinite, yc) # && all(isfinite, mc) # moved condition to check above
+        # @error("NaN values in yc from inputs: xf = $xf; mc = $mc; bc = $bc; A = $A; k = $k; return_spl = $return_spl; enforce_positivity = $enforce_positivity; nnls_alg = $nnls_alg")
         # set NaNs to zero  (is this good> we seemed to get from very very small numbers but idk..., like 1e-300
         yc = resolve_nan.(yc, zero(eltype(yc)))
     end
