@@ -38,7 +38,6 @@ function get_data_new_z_t_LES(
 )
 
     if conservative_interp && isnothing(A)
-        LinearAlgebra.BLAS.set_num_threads(1) # if you're on HPC this is essential to A\b not slowing down by 5 orders of magnitude from 1ms to 100s
         if interp_method ∈ [:Spline1D, :Dierckx]
             A = get_conservative_A(z_new; method = interp_method, Spline1D_interp_kwargs...)
         elseif interp_method ∈ [:pchip_smooth_derivative, :pchip_smooth]

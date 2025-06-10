@@ -5,6 +5,8 @@ import CLIMAParameters as CP # use CLIMAParameters = "0.7, 0.8, 0.9, 0.10"
 import Thermodynamics as TD
 import Thermodynamics.Parameters as TDP
 
+@warn "If you're on HPC, you should set `export OPENBLAS_NUM_THREADS=1` in your environment, or use `LinearAlgebra.BLAS.set_num_threads(1)` in your code to avoid performance issues."
+
 @testset "SOCRATESSingleColumnForcings" begin
     FT = Float64
 

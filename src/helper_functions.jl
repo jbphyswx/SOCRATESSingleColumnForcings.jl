@@ -906,7 +906,6 @@ function get_data_new_z_t(
 )
 
     if conservative_interp && isnothing(A)
-        LinearAlgebra.BLAS.set_num_threads(1) # if you're on HPC this is essential to A\b not slowing down by 5 orders of magnitude from 1ms to 100s 
         if interp_method ∈ [:Spline1D, :Dierckx]
             A = get_conservative_A(z_new; method = interp_method, Spline1D_interp_kwargs...)
             Af = LinearAlgebra.factorize(A)
@@ -1167,3 +1166,5 @@ end
 function squeeze(x)
     return dropdims(x, dims = (findall(size(x) .== 1)...,))
 end
+
+set_property(x::NamedTuple, field::Symbol, value) = merge(x, (field => value,))  # edit the value in a named tuple

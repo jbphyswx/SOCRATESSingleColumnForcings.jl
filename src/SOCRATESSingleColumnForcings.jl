@@ -9,9 +9,13 @@ using Dierckx
 using LinearAlgebra: LinearAlgebra, factorize
 using Dates
 
-LinearAlgebra.BLAS.set_num_threads(1) # if you're on HPC this is essential to A\b not slowing down by 5 orders of magnitude from 1ms to 100s 
 
-resolve_nan(x::FT, val = FT(0.0)) where {FT} = isnan(x) ? FT(val) : x # replace nan w/ 0
+resolve_nan(x::FT, val::FT = FT(0.0)) where {FT} = isnan(x) ? FT(val) : x # replace nan w/ 0
+function resolve_nan!(x::AbstractArray{FT}, val::FT = FT(0.0)) where {FT}
+    @inbounds for i in eachindex(x)
+        x[i] = resolve_nan(x[i], val)
+    end
+end
 # resolve_inf(x::FT; val::FT=FT(NaN)) where {FT} = isinf(x) ? val : x # replace inf with NaN
 # resolve_not_finite(x::FT, val = FT(0.0)) where {FT} = !isfinite(x) ? FT(val) : x # replace inf and nan with 0
 

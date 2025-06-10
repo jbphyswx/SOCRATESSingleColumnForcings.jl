@@ -31,6 +31,10 @@ function process_case(
     conservative_interp_kwargs::DCIKT = default_conservative_interp_kwargs,
 )
 
+    # Edit to default to only applying `enforce_positivity` to `qt_nudge` and `H_nudge` (which are positive definite), and not to `dTdt_hadv`, `dqtdt_hadv`, `u_nudge`, `v_nudge`, `ug_nudge`, `vg_nudge`, or `dTdt_rad`.
+    enforce_positivity = conservative_interp_kwargs[:enforce_positivity] # this is a property of the conservative interpolation, not the forcing_type, so we set it here
+    conservative_interp_kwargs = set_property(conservative_interp_kwargs, :enforce_positivity, false) # Do not to this by default, it's only qt_nudge and H_nudge that are positive definite... Arguably both of those should easily stay positive (maybe qt can have problems near the top, but θ/H_nudge is solidly positive...)
+
     # initial conditions
     (forcing_type ∈ (:obs_data, :ERA5_data)) || error("forcing_type must be :obs_data or :ERA5_data")
 
@@ -349,7 +353,7 @@ function process_case(
         data = LES_data,
         initial_condition,
         conservative_interp = conservative_interp,
-        conservative_interp_kwargs = conservative_interp_kwargs,
+        conservative_interp_kwargs = conservative_interp_kwargs, # can be negative
         weight = ρ_LES, # conservative sure but should it be mass weighted? T is intensive...
         A = get(A_cache, (:Spline1D, 1), nothing),
         Af = get(Af_cache, (:Spline1D, 1), nothing),
@@ -371,7 +375,7 @@ function process_case(
         thermo_params,
         initial_condition,
         conservative_interp = conservative_interp,
-        conservative_interp_kwargs = conservative_interp_kwargs,
+        conservative_interp_kwargs = conservative_interp_kwargs, # can be negative
         weight = ρ,
         A = get(A_cache, (:Spline1D, 1), nothing),
         Af = get(Af_cache, (:Spline1D, 1), nothing),
@@ -394,7 +398,7 @@ function process_case(
             :f_p_enhancement_factor => 8,
         ),  # not too high to avoid cusps (changed to high to keep model fidelity)
         conservative_interp = conservative_interp,
-        conservative_interp_kwargs = conservative_interp_kwargs,
+        conservative_interp_kwargs = set_property(conservative_interp_kwargs, :enforce_positivity, enforce_positivity), # this is always positive (it's θ)
         weight = ρ,
         A = get(A_cache, (:Spline1D, 1), nothing),
         Af = get(Af_cache, (:Spline1D, 1), nothing),
@@ -412,7 +416,7 @@ function process_case(
         thermo_params,
         initial_condition,
         conservative_interp = conservative_interp,
-        conservative_interp_kwargs = conservative_interp_kwargs,
+        conservative_interp_kwargs = conservative_interp_kwargs, # can be negative
         weight = ρ,
         A = get(A_cache, (:Spline1D, 1), nothing),
         Af = get(Af_cache, (:Spline1D, 1), nothing),
@@ -435,7 +439,7 @@ function process_case(
             :f_p_enhancement_factor => 8,
         ),  # not too high to avoid cusps
         conservative_interp = conservative_interp,
-        conservative_interp_kwargs = conservative_interp_kwargs,
+        conservative_interp_kwargs = set_property(conservative_interp_kwargs, :enforce_positivity, enforce_positivity), # this is always positive (it's qt)
         weight = ρ,
         A = get(A_cache, (:Spline1D, 1), nothing),
         Af = get(Af_cache, (:Spline1D, 1), nothing),
@@ -458,7 +462,7 @@ function process_case(
             :f_p_enhancement_factor => 1,
         ),  # lower for gentle changes and no sharp convergence/divergence, loss of accuraacy ok
         conservative_interp = conservative_interp,
-        conservative_interp_kwargs = conservative_interp_kwargs,
+        conservative_interp_kwargs = conservative_interp_kwargs, # can be negative
         weight = ρ,
         A = get(A_cache, (:Spline1D, 1), nothing),
         Af = get(Af_cache, (:Spline1D, 1), nothing),
@@ -475,7 +479,7 @@ function process_case(
         thermo_params,
         initial_condition,
         conservative_interp = conservative_interp,
-        conservative_interp_kwargs = conservative_interp_kwargs,
+        conservative_interp_kwargs = conservative_interp_kwargs, # can be negative
         weight = ρ,
         A = get(A_cache, (:Spline1D, 1), nothing),
         Af = get(Af_cache, (:Spline1D, 1), nothing),
@@ -492,7 +496,7 @@ function process_case(
         thermo_params,
         initial_condition,
         conservative_interp = conservative_interp,
-        conservative_interp_kwargs = conservative_interp_kwargs,
+        conservative_interp_kwargs = conservative_interp_kwargs, # can be negative
         weight = ρ,
         A = get(A_cache, (:Spline1D, 1), nothing),
         Af = get(Af_cache, (:Spline1D, 1), nothing),
@@ -509,7 +513,7 @@ function process_case(
         thermo_params,
         initial_condition,
         conservative_interp = conservative_interp,
-        conservative_interp_kwargs = conservative_interp_kwargs,
+        conservative_interp_kwargs = conservative_interp_kwargs, # can be negative
         weight = ρ,
         A = get(A_cache, (:Spline1D, 1), nothing),
         Af = get(Af_cache, (:Spline1D, 1), nothing),
@@ -525,7 +529,7 @@ function process_case(
         thermo_params,
         initial_condition,
         conservative_interp = conservative_interp,
-        conservative_interp_kwargs = conservative_interp_kwargs,
+        conservative_interp_kwargs = conservative_interp_kwargs, # can be negative
         weight = ρ,
         A = get(A_cache, (:Spline1D, 1), nothing),
         Af = get(Af_cache, (:Spline1D, 1), nothing),

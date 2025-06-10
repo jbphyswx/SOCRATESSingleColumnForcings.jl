@@ -216,11 +216,15 @@ function conservative_regridder(
     )
 
     # calculate bin edges, at the end assume the same spacing, as is if it was a cell center
-    x_edges = FT[
-        x[1] - (x[2] - x[1]) / 2,
-        (x[1:(end - 1)] .+ (x[2:end] - x[1:(end - 1)]) / 2)...,
-        x[end] + (x[end] - x[end - 1]) / 2,
-    ]
+    n = length(x)
+    x_edges = Vector{FT}(undef, length(x) + 1)
+    @inbounds begin
+        x_edges[1] = x[1] - (x[2] - x[1]) / 2
+        for i in 1:(n - 1)
+            x_edges[i + 1] = (x[i] + x[i + 1]) / 2
+        end
+        x_edges[n + 1] = x[n] + (x[n] - x[n - 1]) / 2
+    end
 
 
 
@@ -283,6 +287,7 @@ function conservative_regridder(
             nnls_tol = nnls_tol,
             A = A,
             Af = Af,
+            yc = y,
         ) # this is the new y values that will yield the same mass as the original spline
 
         if enforce_positivity && (0 < y_mean < 1)
@@ -404,19 +409,16 @@ function conservative_spline_values(
     nnls_tol = FT(1e-8),
     A::Union{AbstractMatrix, Nothing} = nothing,
     Af::Union{AbstractMatrix, Nothing} = nothing,
+    yc::Union{AbstractVector{FT2}, Nothing} = nothing,
 ) where {FT, FT2}
 
-    LinearAlgebra.BLAS.set_num_threads(1) # if you're on HPC this is essential to A\b not slowing down by 5 orders of magnitude from 1ms to 100s 
 
     xc = FT(0.5) .* (xf[1:(end - 1)] .+ xf[2:end])
 
-    if isnothing(Af)
+    if isnothing(Af) || enforce_positivity # enforce positivity uses the NNLS solver which cannot take a factorization
         if isnothing(A)
             n = length(mc)
             A = zeros(FT, n, n)
-
-
-
             for j in 1:n
                 ej = zeros(FT, n)
                 ej[j] = FT(1.0)
@@ -454,18 +456,23 @@ function conservative_spline_values(
                     )
                 end
             end
-        else
-            A = Af # just use the factorization if you have it
         end
+        A = LinearAlgebra.factorize(A) # Replace A with its factorization for fast solves
+    else
+        A = Af # just use the factorization if you have it
+    end
+
+    if isnothing(yc)
+        yc = zeros(FT2, length(xc)) # initialize yc if not given
     end
 
     if enforce_positivity
         if 0 < mean(mc) < (2 * eps(FT)^0.5)
             @warn "mean(mc) = $(mean(mc)) < [2 * eps($FT)^0.5 = $(2 * eps(FT)^0.5)]; this is very small, NNLS may arbitarily converge to 0. Consider scaling your data to be larger."
         end
-        yc = NonNegLeastSquares.nonneg_lsq(A, mc; alg = nnls_alg, tol = nnls_tol)[:] # Non-negative least square solver
+        yc[:] = NonNegLeastSquares.nonneg_lsq(A, mc; alg = nnls_alg, tol = nnls_tol)[:] # Non-negative least square solver
     else
-        yc = A \ mc # check 2nd run....
+        yc[:] = A \ mc # check 2nd run....
         # @info "Conservative regridder: A = $A; mc = $mc; yc = $yc"
     end
 
@@ -474,7 +481,7 @@ function conservative_spline_values(
     elseif any(!isfinite, yc) # && all(isfinite, mc) # moved condition to check above
         # @error("NaN values in yc from inputs: xf = $xf; mc = $mc; bc = $bc; A = $A; k = $k; return_spl = $return_spl; enforce_positivity = $enforce_positivity; nnls_alg = $nnls_alg")
         # set NaNs to zero  (is this good> we seemed to get from very very small numbers but idk..., like 1e-300
-        yc = resolve_nan.(yc, zero(eltype(yc)))
+        resolve_nan!(yc)
     end
     return xc, yc
 end
@@ -489,12 +496,16 @@ function get_conservative_A(
     f_p_enhancement_factor::Union{Int, Nothing} = nothing,
 ) where {FT}
 
-
-    xf = FT[
-        xc[1] - (xc[2] - xc[1]) / 2,
-        (xc[1:(end - 1)] .+ (xc[2:end] - xc[1:(end - 1)]) / 2)...,
-        xc[end] + (xc[end] - xc[end - 1]) / 2,
-    ]
+    # calculate bin edges, at the end assume the same spacing, as is if it was a cell center
+    n = length(xc)
+    xf = Vector{FT}(undef, length(xc) + 1)
+    @inbounds begin
+        xf[1] = xc[1] - (xc[2] - xc[1]) / 2
+        for i in 1:(n - 1)
+            xf[i + 1] = (xc[i] + xc[i + 1]) / 2
+        end
+        xf[n + 1] = xc[n] + (xc[n] - xc[n - 1]) / 2
+    end
 
     n = length(xc)
     if FT <: Int
