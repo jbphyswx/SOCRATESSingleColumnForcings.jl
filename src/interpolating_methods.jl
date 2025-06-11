@@ -191,7 +191,7 @@ function conservative_regridder(
     rtol = FT(1e-6),
     preserve_monotonicity::Bool = false,
     enforce_positivity::Bool = false,
-    nnls_alg::Symbol = :fnnls,
+    nnls_alg::Symbol = :pivot,
     nnls_tol = FT(1e-8),
     enforce_conservation::Bool = true,
     A::Union{AbstractMatrix, Nothing} = nothing,
@@ -405,61 +405,33 @@ function conservative_spline_values(
     f_p_enhancement_factor::Union{Int, Nothing} = nothing,
     rtol = FT(1e-6),
     enforce_positivity::Bool = false,
-    nnls_alg::Symbol = :fnnls,
+    nnls_alg::Symbol = :pivot,
     nnls_tol = FT(1e-8),
     A::Union{AbstractMatrix, Nothing} = nothing,
     Af::Union{AbstractMatrix, Nothing} = nothing,
     yc::Union{AbstractVector{FT2}, Nothing} = nothing,
 ) where {FT, FT2}
 
-
     xc = FT(0.5) .* (xf[1:(end - 1)] .+ xf[2:end])
 
-    if isnothing(Af) || enforce_positivity # enforce positivity uses the NNLS solver which cannot take a factorization
+    if (isnothing(Af) && !enforce_positivity) || (isnothing(A) && enforce_positivity) # we want to use Af because it's faster unless we are in enforce_positivity mode bc the NNLS solver can't use a factorization
         if isnothing(A)
-            n = length(mc)
-            A = zeros(FT, n, n)
-            for j in 1:n
-                ej = zeros(FT, n)
-                ej[j] = FT(1.0)
-                φj = pyinterp(
-                    xc, # we're not using the avlue
-                    xc,
-                    ej;
-                    k = k,
-                    bc = bc,
-                    method = :Spline1D,
-                    return_spl = true, # we want a spline out
-                    f_enhancement_factor = f_enhancement_factor,
-                    f_p_enhancement_factor = f_p_enhancement_factor,
-                )
-
-
-                if method == :Spline1D
-                    width = k + 1 # Support width of each spline basis fcn [ this should push us from quadratic n^2 to linear kn ]
-                    i_start = max(1, j - width)
-                    i_end = min(n, j + width)
-                    for i in i_start:i_end
-                        A[i, j] = dierckx_safe_integrate(φj, xf[i], xf[i + 1]; bc = bc) / (xf[i + 1] - xf[i]) # this is fast
-                        if !isfinite(A[i, j])
-                            # @error("A[$i, $j] = $(A[i, j]); from inputs xf = $xf; mc = $mc; bc = $bc; k = $k; φj = $φj; xf[i] = $(xf[i]); xf[i+1] = $(xf[i+1])")
-                            A[i, j] = FT(0.0) # is this ok?
-                        end
-                    end
-                elseif method ∈ (:pchip, :pchip_smooth_derivative, :pchip_smooth)
-                    # for i in 1:n
-                    #     A[i, j] =
-                    #         first(Integrals.QuadGK.quadgk(φj, xf[i], xf[i + 1]; rtol = rtol)) / (xf[i + 1] - xf[i]) # it could be anything so integrate (note this is very slow...)
-                    # end
-                    error(
-                        "Conservative interpolation not yet supported for pchip due to compatibility issues with Integrals.jl vs 3.9, and 4.0, and other SciML packages like DiffEqBase.jl. Consider creating a version that relies on analytical solutions for extrapolation and pchip's integrate method inside.",
-                    )
-                end
-            end
+            A = get_conservative_A(
+                xc;
+                bc = bc,
+                k = k,
+                method = method,
+                f_enhancement_factor = f_enhancement_factor,
+                f_p_enhancement_factor = f_p_enhancement_factor,
+            )
         end
-        A = LinearAlgebra.factorize(A) # Replace A with its factorization for fast solves
+        if !enforce_positivity
+            A = LinearAlgebra.factorize(A) # Replace A with its factorization for fast solves
+        end
     else
-        A = Af # just use the factorization if you have it
+        if !enforce_positivity # we know Af isn't nothing bc we checked above
+            A = Af # just use the factorization if you have it
+        end
     end
 
     if isnothing(yc)
@@ -468,12 +440,11 @@ function conservative_spline_values(
 
     if enforce_positivity
         if 0 < mean(mc) < (2 * eps(FT)^0.5)
-            @warn "mean(mc) = $(mean(mc)) < [2 * eps($FT)^0.5 = $(2 * eps(FT)^0.5)]; this is very small, NNLS may arbitarily converge to 0. Consider scaling your data to be larger."
+            @warn "mean(mc) = $(mean(mc)) < [2 * eps($FT)^0.5 = $(2 * eps(FT)^0.5)]; this is very small, NNLS may arbitrarily converge to 0. Consider scaling your data to be larger."
         end
-        yc[:] = NonNegLeastSquares.nonneg_lsq(A, mc; alg = nnls_alg, tol = nnls_tol)[:] # Non-negative least square solver
+        yc .= max.(NonNegLeastSquares.nonneg_lsq(A, mc; alg = nnls_alg, tol = nnls_tol)[:], FT(0)) # Non-negative least square solver (bound the output by 0, since some algs like :pivot can leave underflow negatives like 1e-17 in NonNegativeLeastSquares.jl)
     else
-        yc[:] = A \ mc # check 2nd run....
-        # @info "Conservative regridder: A = $A; mc = $mc; yc = $yc"
+        yc .= A \ mc # check 2nd run....
     end
 
     if any(!isfinite, mc)
@@ -547,6 +518,7 @@ function get_conservative_A(
             )
         end
     end
+    A .= max.(A, FT(0)) # ensure no negative values, sometimes we get like tiny 1e-17s, not sure why, might be like subtraction underflow
     return A
 end
 

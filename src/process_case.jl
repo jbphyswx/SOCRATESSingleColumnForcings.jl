@@ -27,7 +27,7 @@ function process_case(
     use_LES_output_for_z::Bool = false,
     return_old_z::Bool = false,
     fail_on_missing_data::Bool = true,
-    conservative_interp::Bool = true,
+    conservative_interp::Bool = false, # off by default
     conservative_interp_kwargs::DCIKT = default_conservative_interp_kwargs,
 )
 

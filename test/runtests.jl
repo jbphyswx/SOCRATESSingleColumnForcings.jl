@@ -43,6 +43,7 @@ import Thermodynamics.Parameters as TDP
     use_LES_output_for_zs = (false, true)
     return_old_zs = (false, true)
     conservative_interps = (false, true)
+    enforce_positivitys = (false, true)
 
     setups = Iterators.product(
         SSCF.flight_numbers,
@@ -53,11 +54,11 @@ import Thermodynamics.Parameters as TDP
         use_LES_output_for_zs,
         return_old_zs,
         conservative_interps,
+        enforce_positivitys,
     )
 
     n_setups = length(setups)
     for (i, setup) in enumerate(setups)
-        @info "Testing combination $i/$n_setups"
         flight_number,
         forcing_type,
         new_z,
@@ -65,9 +66,23 @@ import Thermodynamics.Parameters as TDP
         surface,
         use_LES_output_for_z,
         return_old_z,
-        conservative_interp = setup
+        conservative_interp,
+        enforce_positivity = setup
+
+        @info "Testing combination $i/$n_setups: flight_number=$flight_number, forcing_type=$forcing_type, initial_condition=$initial_condition, surface=$(surface), use_LES_output_for_z=$use_LES_output_for_z, return_old_z=$return_old_z, conservative_interp=$conservative_interp, enforce_positivity=$enforce_positivity"
+
+
+
         data = SSCF.open_atlas_les_input(flight_number, forcing_type; open_files = false)
         conservative_interp_kwargs = SSCF.get_conservative_interp_kwargs(;)
+
+        if !conservative_interp && (enforce_positivity)
+            continue # it wont get called anyway...
+        end
+        if conservative_interp
+            conservative_interp_kwargs =
+                SSCF.set_property(conservative_interp_kwargs, :enforce_positivity, enforce_positivity)
+        end
 
         # check files all exist
         # if isfile(data[forcing_type]) && isfile(data[:grid_data])
@@ -82,6 +97,7 @@ import Thermodynamics.Parameters as TDP
                 surface = surface,
                 use_LES_output_for_z = use_LES_output_for_z,
                 return_old_z = return_old_z,
+                conservative_interp = conservative_interp,
                 conservative_interp_kwargs = conservative_interp_kwargs,
                 fail_on_missing_data = false,
             )
