@@ -21,6 +21,12 @@ function open_atlas_les_input(
         error("forcing_type must be :obs_data or :ERA5_data")
     end
 
+    # check if file exists and if not, download it
+    # The data is quite large so we'll try to load it from Box
+    if !isfile(data_filename)
+        download_atlas_les_inputs(; flight_numbers = (flight_number,), forcing_types = (forcing_type,))
+    end
+
 
     data = isfile(data_filename) ? (open_files ? NC.Dataset(data_filename, "r") : data_filename) : nothing
 
@@ -40,6 +46,10 @@ function open_atlas_les_grid(flight_number::Int; open_files::Bool = true)
     RF_num = "RF" * string(flight_number, pad = 2)
     grid_filename = joinpath(atlas_dir, RF_num * "_grd.txt")
 
+    if !isfile(grid_filename)
+        download_atlas_les_inputs(; flight_numbers = (flight_number,), forcing_types = (:obs_data,))
+    end
+
     grid_data = isfile(grid_filename) ? (open_files ? vec(readdlm(grid_filename, FT)) : grid_filename) : nothing
 
     return (; grid_data)
@@ -56,10 +66,13 @@ function open_atlas_les_input(flight_number::Int; open_files::Bool = true)
     ERA5_filename = joinpath(atlas_dir, RF_num * "_ERA5-based_SAM_input_mar18_2022.nc") # e.g. https://atmos.uw.edu/~ratlas/RF12_ERA5-based_SAM_input_mar18_2022.nc
     grid_filename = joinpath(atlas_dir, RF_num * "_grd.txt")
 
-    # @show(obs_filename, ERA5_filename, grid_filename)
 
     # local obs_data, ERA5_data, grid_data # initialize cause try catch scope is closed
     # can't use do blocks here cause will close the files...
+
+    if !isfile(obs_filename) || !isfile(ERA5_filename) || !isfile(grid_filename)
+        download_atlas_les_inputs(; flight_numbers = (flight_number,), forcing_types = forcing_types)
+    end
 
     obs_data = isfile(obs_filename) ? (open_files ? NC.Dataset(obs_filename, "r") : obs_filename) : nothing
     ERA5_data = isfile(ERA5_filename) ? (open_files ? NC.Dataset(ERA5_filename, "r") : ERA5_filename) : nothing

@@ -3,11 +3,12 @@ module SOCRATESSingleColumnForcings
 import Thermodynamics as TD
 const TDP = TD.Parameters
 import NCDatasets as NC
-using DelimitedFiles
-using Statistics
-using Dierckx
+using DelimitedFiles: DelimitedFiles, readdlm
+using Statistics: Statistics, mean
+using Dierckx: Dierckx, Spline1D
 using LinearAlgebra: LinearAlgebra, factorize
-using Dates
+using Dates: Dates
+using Downloads: download
 
 
 resolve_nan(x::FT, val::FT = FT(0.0)) where {FT} = isnan(x) ? FT(val) : x # replace nan w/ 0
@@ -21,8 +22,8 @@ end
 
 # include our files
 const FT = Float64
-const flight_numbers = [1, 9, 10, 11, 12, 13]
-const forcing_types = [:obs_data, :ERA5_data] # maybe change these to [:obs,:ERA5] later? would need to mirror in Cases.jl in TC.jl
+const flight_numbers = (1, 9, 10, 11, 12, 13)
+const forcing_types = (:obs_data, :ERA5_data) # maybe change these to [:obs,:ERA5] later? would need to mirror in Cases.jl in TC.jl
 const TDPS = TD.Parameters.ThermodynamicsParameters
 const TDTS = TD.ThermodynamicState
 
