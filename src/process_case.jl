@@ -70,7 +70,8 @@ function process_case(
         flight_ind = findfirst(SOCRATES_summary["flight_number"][:] .== flight_number)
         Tg_offset = SOCRATES_summary[:deltaT][flight_ind]  # I think this is backwards in table 2 in the paper... is really T_2m - SST as in Section 3
         if surface ∈ ["reference_state", "reference", "ref"]  # we just want the surface reference state and we'll just return that
-            Tg = data[forcing_type]["Tg"][:][initial_ind] + Tg_offset # might have to drop lon,lat dims or sum
+            Tg_orig = data[forcing_type]["Tg"][:][initial_ind] # SST
+            Tg = Tg_orig + Tg_offset # might have to drop lon,lat dims or sum
             pg = data[forcing_type]["Ps"][:][initial_ind]
 
             if Tg_offset < 0  # SST/T_orig > Tg, assume SST sets qg at ground level and serves as a source
@@ -102,6 +103,8 @@ function process_case(
                 qg = map((pg, q) -> calc_qg_extrapolate_pq([pg], p, q)[1], pg, q) # map the function to get out qg for each time step
             end
 
+            qg_orig = calc_qg_from_pgTg.(pg, Tg_orig, thermo_params)  # surface specific humidity over liquid at original Tg (SST)
+
             tg = data[forcing_type]["tsec"][initial_ind:end] # get the time array
             tg = tg .- tg[1] # i think we need this to get the initial time to be 0, so the interpolation works
             # in this interpolation, tsec has to be adjusted to our offsets no? or we clip e.g. pg to be pg[initial_ind:end], tsec would also need to be adjusted no?, subtract the value at initial_ind i guess...
@@ -109,10 +112,16 @@ function process_case(
                 pg = let tg = tg, pg = pg # let block for performance of captured variables
                     t -> pyinterp([t], tg, pg; method = :Spline1D)[1] # in time always use spline1d rn...
                 end,
-                Tg = let tg = tg, Tg = Tg # let block for performance of capturd variables
+                Tg = let tg = tg, Tg = Tg # let block for performance of captured variables
+                    t -> pyinterp([t], tg, Tg; method = :Spline1D)[1]
+                end,
+                Tsfc = let tg = tg, Tg = Tg_orig # let block for performance of captured variables [ we need to store the SST -- while it's true qg can be calculated from Tg initially, for correct sensible and latent heat fluxes we need the actual ground temp value ]
                     t -> pyinterp([t], tg, Tg; method = :Spline1D)[1]
                 end,
                 qg = let tg = tg, qg = qg # let block for performance of captured variables
+                    t -> pyinterp([t], tg, qg; method = :Spline1D)[1]
+                end,
+                qsfc = let tg = tg, qg = qg_orig # let block for performance of captured variables # this is the q* of the Tsfc, the actual ground value. However I'm not sure we should actually use this as our surface q, evaporation from sfc will pull us towards it.
                     t -> pyinterp([t], tg, qg; method = :Spline1D)[1]
                 end,
             ) # would use ref and broadcast but doesnt convert back to array
