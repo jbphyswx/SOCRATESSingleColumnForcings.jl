@@ -56,7 +56,7 @@ function get_LES_reference_profiles(
     z = NC.nomissing(LES_data["z"][:])
 
     p = NC.nomissing(LES_data["p"][:]) .* 100.0 # Pressure variations in SAM are under a milibar, so we can use the 1D p variable rather than the 2D PRES variable
-    ps = NC.nomissing(LES_data["Ps"][1]) * 100.0 # surface pressure
+    ps = LES_data["Ps"][1] * 100.0 # surface pressure
     ρ = NC.nomissing(LES_data["RHO"][:, 1]) # use t=0 as our reference
     # extrapolate to get ρs since that's not given (not calculating from first principles probably is safer too w/ uncertainty in q)
     ρs = interpolate_1d(ps, reverse(p), reverse(ρ); method = FastLinear1DInterpolationMethod(), bc = "extrapolate") # switch to increasing for interpolation
