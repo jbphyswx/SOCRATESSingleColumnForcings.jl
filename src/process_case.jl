@@ -29,7 +29,9 @@ function process_case(
     fail_on_missing_data::Bool = true,
     conservative_interp::Bool = false, # off by default
     conservative_interp_kwargs::DCIKT = default_conservative_interp_kwargs,
+    use_svectors::Bool = false,
 )
+
 
     # Edit to default to only applying `enforce_positivity` to `qt_nudge` and `H_nudge` (which are positive definite), and not to `dTdt_hadv`, `dqtdt_hadv`, `u_nudge`, `v_nudge`, `ug_nudge`, `vg_nudge`, or `dTdt_rad`.
     enforce_positivity = conservative_interp_kwargs[:enforce_positivity] # this is a property of the conservative interpolation, not the forcing_type, so we set it here
@@ -80,8 +82,8 @@ function process_case(
                 p = vec(data[forcing_type]["lev"])[:]
                 q = vec(selectdim(data[forcing_type]["q"], time_dim_num, initial_ind))[:] # select our q value subset along the time dimension
                 q = q ./ (1 .+ q) # mixing ratio to specific humidity
-                qg = calc_qg_extrapolate_pq([pg], p, q)
-                qg = collect(qg)[]  # Thermodynamics 0.10.2 returns a tuple rather than scalar, so this can collapse to scalar in either 0.10.1<= or 0.10.2>=
+                qg = calc_qg_extrapolate_pq(pg, p, q)
+                # qg = collect(qg)[]  # Thermodynamics 0.10.2 returns a tuple rather than scalar, so this can collapse to scalar in either 0.10.1<= or 0.10.2>=
             end
             return TD.PhaseEquil_pTq(thermo_params, pg, Tg, qg)
         elseif surface ∈ ["surface_conditions", "conditions", "cond"]
@@ -100,7 +102,7 @@ function process_case(
                 ) # select our q value subset along the time dimension
                 q = vec.(collect(eachslice(q, dims = time_dim_num))) # turn our q from [lon, lat, lev, time] to a list of vectors along [lon,lat,lev] to match p
                 q = map(mr -> mr ./ (1.0 .+ mr), q) # mixing ratio to specific humidity for each vector we created in q
-                qg = map((pg, q) -> calc_qg_extrapolate_pq([pg], p, q)[1], pg, q) # map the function to get out qg for each time step
+                qg = map((pg, q) -> calc_qg_extrapolate_pq(pg, p, q), pg, q) # map the function to get out qg for each time step
             end
 
             qg_orig = calc_qg_from_pgTg.(pg, Tg_orig, thermo_params)  # surface specific humidity over liquid at original Tg (SST)
@@ -110,19 +112,19 @@ function process_case(
             # in this interpolation, tsec has to be adjusted to our offsets no? or we clip e.g. pg to be pg[initial_ind:end], tsec would also need to be adjusted no?, subtract the value at initial_ind i guess...
             return (;
                 pg = let tg = tg, pg = pg # let block for performance of captured variables
-                    t -> pyinterp([t], tg, pg; method = :Spline1D)[1] # in time always use spline1d rn...
+                    t -> interpolate_1d(t, tg, pg, FastLinear1DInterpolation; bc = "extrapolate")
                 end,
                 Tg = let tg = tg, Tg = Tg # let block for performance of captured variables
-                    t -> pyinterp([t], tg, Tg; method = :Spline1D)[1]
+                    t -> interpolate_1d(t, tg, Tg, FastLinear1DInterpolation; bc = "extrapolate")
                 end,
                 Tsfc = let tg = tg, Tg = Tg_orig # let block for performance of captured variables [ we need to store the SST -- while it's true qg can be calculated from Tg initially, for correct sensible and latent heat fluxes we need the actual ground temp value ]
-                    t -> pyinterp([t], tg, Tg; method = :Spline1D)[1]
+                    t -> interpolate_1d(t, tg, Tg, FastLinear1DInterpolation; bc = "extrapolate")
                 end,
                 qg = let tg = tg, qg = qg # let block for performance of captured variables
-                    t -> pyinterp([t], tg, qg; method = :Spline1D)[1]
+                    t -> interpolate_1d(t, tg, qg, FastLinear1DInterpolation; bc = "extrapolate")
                 end,
                 qsfc = let tg = tg, qg = qg_orig # let block for performance of captured variables # this is the q* of the Tsfc, the actual ground value. However I'm not sure we should actually use this as our surface q, evaporation from sfc will pull us towards it.
-                    t -> pyinterp([t], tg, qg; method = :Spline1D)[1]
+                    t -> interpolate_1d(t, tg, qg, FastLinear1DInterpolation; bc = "extrapolate")
                 end,
             ) # would use ref and broadcast but doesnt convert back to array
         else
@@ -150,7 +152,7 @@ function process_case(
     Tg = map(Tg -> Tg .+ Tg_offset, Tg)
 
     if Tg_offset < 0  # SST > Tg, assume Tg limits moisture below last known point and just extrapolate
-        base_calc_qg = (pg, p, q) -> calc_qg_extrapolate_pq([pg], p, q[:])[1] # pg->[pg] for pyinterp and [1] for just the value out
+        base_calc_qg = (pg, p, q) -> calc_qg_extrapolate_pq(pg, p, q[:])
         qg = map(
             (pg, p, q) ->
                 base_calc_qg.(
@@ -165,7 +167,7 @@ function process_case(
 
     else # Tg > SST/T_orig, assume SST sets moisture  below last known point (t > t_orig), t_orig = Tg_q_sfc
         # Tg_q_sfc = map((x,y) -> min.(x, y), Tg, Tg_orig) # min of Tg and T (Moisture comes from evaporation, if Tg < SST, SST limits moisture, if Tg > SST, Tg limits moisture) This is important bc it's how we extrapolate from the surface...
-        base_calc_qg = (pg, Tg) -> calc_qg_from_pgTg(pg, Tg, thermo_params) # pg->[pg] for pyinterp and [1] for just the value out 
+        base_calc_qg = (pg, Tg) -> calc_qg_from_pgTg(pg, Tg, thermo_params) # =
         qg = map(
             (pg, Tg) -> base_calc_qg.(pg, Tg),
             pg,
@@ -323,17 +325,20 @@ function process_case(
 
     # ======================================================================================================================== #
     LES_data = open_atlas_les_output(flight_number, forcing_type)[forcing_type]
-    dTdt_rad = LES_data["RADQR"] ./ (24 * 3600) # convert to K/s from K/day (dividing drops nc dim data tho but converts it to array from ncvariable)
+    dTdt_rad = NC.nomissing(LES_data["RADQR"]) ./ (24 * 3600) # convert to K/s from K/day (dividing drops nc dim data tho but converts it to array from ncvariable)
 
     z_dim_num_LES = get_dim_num("z", LES_data["RADQR"]) # assume it's same for all LES 2D vars?
     time_dim_num_LES = get_dim_num("time", LES_data["RADQR"])
 
-    ρ_LES = LES_data["RHO"] # 2D variable
+    ρ_LES = NC.nomissing(LES_data["RHO"]) # 2D variable
 
     # === Cache the mass response matrix for conservative interpolation === 
     # remember to update the types if we ever bring back pchip etc)
-    A_cache = Dict{Tuple{Symbol, Int}, Array}() # cache for A matrices for the new grid. The grid is always the same we just need a version for each spline type. Recalculating the matrix involves integrals can be expensive so we avoid doing so... (we certainly don't want to be doing it at every t!)
-    Af_cache = Dict{Tuple{Symbol, Int}, Array}() # cache for A matrix factorization, Using the factorized matrix allows for a 3000-1000x speedup from just cacheing the A matrix.
+    # A_cache = Dict{Tuple{Symbol, Int}, Array}() # cache for A matrices for the new grid. The grid is always the same we just need a version for each spline type. Recalculating the matrix involves integrals can be expensive so we avoid doing so... (we certainly don't want to be doing it at every t!)
+    # Af_cache = Dict{Tuple{Symbol, Int}, Array}() # cache for A matrix factorization, Using the factorized matrix allows for a 3000-1000x speedup from just cacheing the A matrix.
+
+    A_cache = Dict{AbstractInterpolationMethod, Array}() # cache for A matrices for the new grid. The grid is always the same we just need a version for each spline type. Recalculating the matrix involves integrals can be expensive so we avoid doing so... (we certainly don't want to be doing it at every t!)
+    Af_cache = Dict{AbstractInterpolationMethod, Array}()
 
     if conservative_interp
         # conservative interpolation is a bit more expensive, so we cache the A matrix for the Spline1D method
@@ -342,8 +347,9 @@ function process_case(
                 It would be nice if the calls to get_data_new_z_t() could update a global cache but the cache shouldn't persist out side of this fcn, we'll just do it manually here
         =#
 
-        A_cache[(:Spline1D, 1)] = get_conservative_A(new_z[:dTdt_rad]; method = :Spline1D, k = 1, bc = "extrapolate") # all the zs are the same, just take 1..
-        Af_cache[(:Spline1D, 1)] = LinearAlgebra.factorize(A_cache[(:Spline1D, 1)]) # storing the cache offers a 300-1000x speedup, since the factorization is the most expensive part...
+        A_cache[FastLinear1DInterpolation] =
+            get_conservative_A(new_z[:dTdt_rad]; method = FastLinear1DInterpolationMethod, k = 1, bc = "extrapolate") # all the zs are the same, just take 1..
+        Af_cache[FastLinear1DInterpolation] = LinearAlgebra.factorize(A_cache[FastLinear1DInterpolation]) # storing the cache offers a 300-1000x speedup, since the factorization is the most expensive part...
 
     end
 
@@ -364,8 +370,9 @@ function process_case(
         conservative_interp = conservative_interp,
         conservative_interp_kwargs = conservative_interp_kwargs, # can be negative
         weight = ρ_LES, # conservative sure but should it be mass weighted? T is intensive...
-        A = get(A_cache, (:Spline1D, 1), nothing),
-        Af = get(Af_cache, (:Spline1D, 1), nothing),
+        A = get(A_cache, FastLinear1DInterpolation, nothing),
+        Af = get(Af_cache, FastLinear1DInterpolation, nothing),
+        use_svectors = use_svectors,
     )[:]# interpolate conservatively and weight by density...
 
     # ======================================================================================================================== #
@@ -386,8 +393,9 @@ function process_case(
         conservative_interp = conservative_interp,
         conservative_interp_kwargs = conservative_interp_kwargs, # can be negative
         weight = ρ,
-        A = get(A_cache, (:Spline1D, 1), nothing),
-        Af = get(Af_cache, (:Spline1D, 1), nothing),
+        A = get(A_cache, FastLinear1DInterpolation, nothing),
+        Af = get(Af_cache, FastLinear1DInterpolation, nothing),
+        use_svectors = use_svectors,
     )[:]  # testing not using forcing_type for obs to see if fixes anything
 
     H_nudge = get_data_new_z_t(
@@ -400,8 +408,8 @@ function process_case(
         data = data[forcing_type],
         thermo_params,
         initial_condition,
-        # interp_method = :pchip_smooth, # testing if this is the one that breaks things
-        interp_method = :Spline1D,
+        # interp_method = PCHIPSmoothDerivativeInterpolationMethod,
+        interp_method = FastLinear1DInterpolationMethod,
         pchip_interp_kwargs = Dict(
             :f_enhancement_factor => 5, # higher to keep sharp inversions
             :f_p_enhancement_factor => 8,
@@ -409,8 +417,9 @@ function process_case(
         conservative_interp = conservative_interp,
         conservative_interp_kwargs = set_property(conservative_interp_kwargs, :enforce_positivity, enforce_positivity), # this is always positive (it's θ)
         weight = ρ,
-        A = get(A_cache, (:Spline1D, 1), nothing),
-        Af = get(Af_cache, (:Spline1D, 1), nothing),
+        A = get(A_cache, FastLinear1DInterpolation, nothing),
+        Af = get(Af_cache, FastLinear1DInterpolation, nothing),
+        use_svectors = use_svectors,
     )[:]
 
     # dqtdt_hadv = get_data_new_z_t(dqtdt_hadv, new_z, z_dim_num,time_dim_num, flight_number; z_old = z_old[forcing_type], data=data[forcing_type], thermo_params,  initial_condition)
@@ -427,8 +436,9 @@ function process_case(
         conservative_interp = conservative_interp,
         conservative_interp_kwargs = conservative_interp_kwargs, # can be negative
         weight = ρ,
-        A = get(A_cache, (:Spline1D, 1), nothing),
-        Af = get(Af_cache, (:Spline1D, 1), nothing),
+        A = get(A_cache, FastLinear1DInterpolation, nothing),
+        Af = get(Af_cache, FastLinear1DInterpolation, nothing),
+        use_svectors = use_svectors,
     )[:] # testing not using forcing_type for obs to see if fixes anything
 
     qt_nudge = get_data_new_z_t(
@@ -441,8 +451,8 @@ function process_case(
         data = data[forcing_type],
         thermo_params,
         initial_condition,
-        # interp_method = :pchip_smooth,
-        interp_method = :Spline1D,
+        # interp_method = PCHIPSmoothDerivativeInterpolationMethod
+        interp_method = FastLinear1DInterpolationMethod,
         pchip_interp_kwargs = Dict(
             :f_enhancement_factor => 6, # higher to keep sharp inversions
             :f_p_enhancement_factor => 8,
@@ -450,8 +460,9 @@ function process_case(
         conservative_interp = conservative_interp,
         conservative_interp_kwargs = set_property(conservative_interp_kwargs, :enforce_positivity, enforce_positivity), # this is always positive (it's qt)
         weight = ρ,
-        A = get(A_cache, (:Spline1D, 1), nothing),
-        Af = get(Af_cache, (:Spline1D, 1), nothing),
+        A = get(A_cache, FastLinear1DInterpolation, nothing),
+        Af = get(Af_cache, FastLinear1DInterpolation, nothing),
+        use_svectors = use_svectors,
     )[:]
 
     subsidence = get_data_new_z_t(
@@ -464,8 +475,8 @@ function process_case(
         data = data[forcing_type],
         thermo_params,
         initial_condition,
-        interp_method = :Spline1D, # verifying if this is still unstable
-        # interp_method = :pchip_smooth,
+        # interp_method = PCHIPSmoothDerivativeInterpolationMethod,
+        interp_method = FastLinear1DInterpolationMethod,
         pchip_interp_kwargs = Dict(
             :f_enhancement_factor => 1, # lower for gentle changes and no sharp convergence/divergence, loss of accuracy ok
             :f_p_enhancement_factor => 1,
@@ -473,8 +484,9 @@ function process_case(
         conservative_interp = conservative_interp,
         conservative_interp_kwargs = conservative_interp_kwargs, # can be negative
         weight = ρ,
-        A = get(A_cache, (:Spline1D, 1), nothing),
-        Af = get(Af_cache, (:Spline1D, 1), nothing),
+        A = get(A_cache, FastLinear1DInterpolation, nothing),
+        Af = get(Af_cache, FastLinear1DInterpolation, nothing),
+        use_svectors = use_svectors,
     )[:]
 
     u_nudge = get_data_new_z_t(
@@ -490,8 +502,9 @@ function process_case(
         conservative_interp = conservative_interp,
         conservative_interp_kwargs = conservative_interp_kwargs, # can be negative
         weight = ρ,
-        A = get(A_cache, (:Spline1D, 1), nothing),
-        Af = get(Af_cache, (:Spline1D, 1), nothing),
+        A = get(A_cache, FastLinear1DInterpolation, nothing),
+        Af = get(Af_cache, FastLinear1DInterpolation, nothing),
+        use_svectors = use_svectors,
     )[:]
 
     v_nudge = get_data_new_z_t(
@@ -507,8 +520,9 @@ function process_case(
         conservative_interp = conservative_interp,
         conservative_interp_kwargs = conservative_interp_kwargs, # can be negative
         weight = ρ,
-        A = get(A_cache, (:Spline1D, 1), nothing),
-        Af = get(Af_cache, (:Spline1D, 1), nothing),
+        A = get(A_cache, FastLinear1DInterpolation, nothing),
+        Af = get(Af_cache, FastLinear1DInterpolation, nothing),
+        use_svectors = use_svectors,
     )[:]
 
     ug_nudge = get_data_new_z_t(
@@ -524,8 +538,9 @@ function process_case(
         conservative_interp = conservative_interp,
         conservative_interp_kwargs = conservative_interp_kwargs, # can be negative
         weight = ρ,
-        A = get(A_cache, (:Spline1D, 1), nothing),
-        Af = get(Af_cache, (:Spline1D, 1), nothing),
+        A = get(A_cache, FastLinear1DInterpolation, nothing),
+        Af = get(Af_cache, FastLinear1DInterpolation, nothing),
+        use_svectors = use_svectors,
     )[:]
     vg_nudge = get_data_new_z_t(
         vg_nudge,
@@ -540,8 +555,9 @@ function process_case(
         conservative_interp = conservative_interp,
         conservative_interp_kwargs = conservative_interp_kwargs, # can be negative
         weight = ρ,
-        A = get(A_cache, (:Spline1D, 1), nothing),
-        Af = get(Af_cache, (:Spline1D, 1), nothing),
+        A = get(A_cache, FastLinear1DInterpolation, nothing),
+        Af = get(Af_cache, FastLinear1DInterpolation, nothing),
+        use_svectors = use_svectors,
     )[:]
 
     return (; dTdt_hadv, H_nudge, dqtdt_hadv, qt_nudge, subsidence, u_nudge, v_nudge, ug_nudge, vg_nudge, dTdt_rad)

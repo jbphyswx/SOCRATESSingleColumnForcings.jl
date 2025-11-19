@@ -53,22 +53,23 @@ function get_LES_reference_profiles(
         error("No LES data found for flight $flight_number")
     end
 
-    z = LES_data["z"][:]
+    z = NC.nomissing(LES_data["z"][:])
 
-    p = LES_data["p"][:] .* 100.0 # Pressure variations in SAM are under a milibar, so we can use the 1D p variable rather than the 2D PRES variable
-    ps = LES_data["Ps"][1] * 100.0 # surface pressure
-    ρ = LES_data["RHO"][:, 1] # use t=0 as our reference
+    p = NC.nomissing(LES_data["p"][:]) .* 100.0 # Pressure variations in SAM are under a milibar, so we can use the 1D p variable rather than the 2D PRES variable
+    ps = NC.nomissing(LES_data["Ps"][1]) * 100.0 # surface pressure
+    ρ = NC.nomissing(LES_data["RHO"][:, 1]) # use t=0 as our reference
     # extrapolate to get ρs since that's not given (not calculating from first principles probably is safer too w/ uncertainty in q)
-    ρs = pyinterp([ps], reverse(p), reverse(ρ); method = :Spline1D, bc = "extrapolate")[1] # switch to increasing for interpolation
+    ρs = interpolate_1d(ps, reverse(p), reverse(ρ); method = FastLinear1DInterpolationMethod(), bc = "extrapolate") # switch to increasing for interpolation
 
+    # Consider switching to SVector but probably not worth it for now since the high res grids can have 320 levels
     p = [ps; p]
     ρ = [ρs; ρ]
     z = [0; z]
 
-    p_c = pyinterp(new_zc, z, p; method = :Spline1D, bc = "extrapolate")
-    p_f = pyinterp(new_zf, z, p; method = :Spline1D, bc = "extrapolate")
-    ρ_c = pyinterp(new_zc, z, ρ; method = :Spline1D, bc = "extrapolate")
-    ρ_f = pyinterp(new_zf, z, ρ; method = :Spline1D, bc = "extrapolate")
+    p_c = interpolate_1d(new_zc, z, p; method = FastLinear1DInterpolationMethod(), bc = "nearest")
+    p_f = interpolate_1d(new_zf, z, p; method = FastLinear1DInterpolationMethod(), bc = "nearest")
+    ρ_c = interpolate_1d(new_zc, z, ρ; method = FastLinear1DInterpolationMethod(), bc = "nearest")
+    ρ_f = interpolate_1d(new_zf, z, ρ; method = FastLinear1DInterpolationMethod(), bc = "nearest")
 
     return NamedTuple{return_values}((p_c, p_f, ρ_c, ρ_f))
 

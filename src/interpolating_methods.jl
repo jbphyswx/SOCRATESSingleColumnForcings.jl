@@ -6,45 +6,273 @@ using NonNegLeastSquares: NonNegLeastSquares, nonneg_lsq
 
 
 
+# ============================================================================================================================================= #   
 
-function pyinterp(
-    x,
+# Scalar fast linear interpolation
+function fast1d_interp(
+    x::TT,
+    xp::AbstractVector{T},
+    fp::AbstractVector{T};
+    bc::String = "error",
+) where {T <: Real, TT <: Real}
+    N = length(xp)
+    if x <= xp[1]
+        if bc == "nearest"
+            return fp[1]
+        elseif bc == "extrapolate"
+            return fp[1] + (fp[2] - fp[1]) * (x - xp[1]) / (xp[2] - xp[1])
+        else
+            error("x = $x below interpolation range")
+        end
+    elseif x >= xp[end]
+        if bc == "nearest"
+            return fp[end]
+        elseif bc == "extrapolate"
+            return fp[end - 1] + (fp[end] - fp[end - 1]) * (x - xp[end - 1]) / (xp[end] - xp[end - 1])
+        else
+            error("x = $x above interpolation range, extrema are extrema(xp) = $(extrema(xp));") # xp = $xp; fp = $fp")
+        end
+    else
+        i = searchsortedlast(xp, x)
+        # clamp i to avoid i+1 > N
+        i = min(i, N - 1)
+        x0, x1 = xp[i], xp[i + 1]
+        y0, y1 = fp[i], fp[i + 1]
+        return y0 + (y1 - y0) * (x - x0) / (x1 - x0)
+    end
+end
+
+
+function fast1d_interp!(
+    y::AbstractVector{TT},
+    x::AbstractVector{TT},
+    xp::AbstractVector{T},
+    fp::AbstractVector{T};
+    bc::String = "error",
+) where {T <: Real, TT <: Real}
+    @inbounds for j in eachindex(x)
+        y[j] = fast1d_interp(x[j], xp, fp; bc = bc)
+    end
+    return y
+end
+
+# Vector version (broadcastable)
+function fast1d_interp(
+    x::AbstractVector{TT},
+    xp::AbstractVector{T},
+    fp::AbstractVector{T};
+    bc::String = "error",
+) where {T <: Real, TT <: Real}
+    y = similar(x)
+    fast1d_interp!(y, x, xp, fp; bc = bc)
+    return y
+end
+
+
+struct FastLinear1DSpline{X <: AbstractVector}
+    xp::X
+    fp::X
+    bc::String
+end
+FastLinear1DSpline(xp::X, fp::X; bc::String = "error") where {X <: AbstractVector} = FastLinear1DSpline{X}(xp, fp, bc)
+
+# Make it broadcastable (for vector or static array evaluation)
+Base.broadcastable(s::FastLinear1DSpline) = Ref(s)
+
+# Make it callable for scalar x
+function (s::FastLinear1DSpline)(x::T) where {T}
+    fast1d_interp(x, s.xp, s.fp; bc = s.bc)
+end
+
+function fast1d_derivative(
+    x::T,
+    spl::FastLinear1DSpline{X};
+    bc::String = "extrapolate",
+) where {T <: Real, X <: AbstractVector{T}}
+    xp, fp = spl.xp, spl.fp
+    N = length(xp)
+
+    if x < xp[1]
+        if bc == "nearest"
+            return zero(T)
+        elseif bc == "extrapolate"
+            return (fp[2] - fp[1]) / (xp[2] - xp[1])
+        else
+            error("x = $x below interpolation range and bc=$bc")
+        end
+    elseif x > xp[end]
+        if bc == "nearest"
+            return zero(T)
+        elseif bc == "extrapolate"
+            return (fp[end] - fp[end - 1]) / (xp[end] - xp[end - 1])
+        else
+            error("x = $x above interpolation range and bc=$bc")
+        end
+    else
+        i = searchsortedlast(xp, x)
+        if i == N
+            i -= 1
+        end
+        return (fp[i + 1] - fp[i]) / (xp[i + 1] - xp[i])
+    end
+end
+
+
+function fast1d_derivative!(
+    y::AbstractVector{T},
+    x::AbstractVector{T},
+    spl::FastLinear1DSpline{X},
+) where {T <: Real, X <: AbstractVector}
+    @inbounds for j in eachindex(x)
+        y[j] = fast1d_derivative(x[j], spl)
+    end
+    return y
+end
+# Vectorized derivative
+function fast1d_derivative(x::AbstractVector{T}, spl::FastLinear1DSpline{X}) where {T <: Real, X <: AbstractVector}
+    y = similar(x)
+    fast1d_derivative!(y, x, spl)
+    return y
+end
+
+
+
+# ============================================================================================================================================= #   
+
+# Build the spline for PCHIP
+function build_spline(method::PCHIPInterpolationMethod, xp, fp; bc::String = "error")
+    spl = PCHIPInterpolation.Interpolator(xp, fp)
+    if bc == "error"
+        error("Not implemented: pchip with bc=\"error\"")
+    elseif bc == "extrapolate"
+        spl = pchip_extrapolate(spl)
+    end
+    return spl
+end
+
+# Build the spline for PCHIPSmoothDerivative
+function build_spline(method::PCHIPSmoothDerivativeInterpolationMethod, xp, fp; bc::String = "error")
+    return pchip_smooth_derivative(
+        xp,
+        fp;
+        bc = bc,
+        f_enhancement_factor = method.f_enhancement_factor,
+        f_p_enhancement_factor = method.f_p_enhancement_factor,
+    )
+end
+
+# Build the spline for DierckxSpline1D
+function build_spline(method::DierckxSpline1DInterpolationMethod, xp, fp; bc::String = "error")
+    return Dierckx.Spline1D(xp, fp; k = method.k, bc = bc)
+end
+
+# Build the spline for FastLinear1DInterpolationMethod
+function build_spline(::FastLinear1DInterpolationMethod, xp::X, fp::X; bc::String = "error") where {X <: AbstractVector}
+    # Return a closure that is broadcastable
+    # return x -> fast1d_interp(x, xp, fp; bc=bc)
+    return FastLinear1DSpline(xp, fp, bc)
+end
+
+# Build the spline for FastLinear1DInterpolationMethod
+function build_spline(
+    ::FastLinear1DInterpolationMethod,
+    xp::AbstractVector{TX},
+    fp::AbstractVector{TY};
+    bc::String = "error",
+) where {TX <: Real, TY <: Real}
+    # Return a closure that is broadcastable
+    # return x -> fast1d_interp(x, xp, fp; bc=bc)
+    FT = promote_type(TX, TY)
+    return FastLinear1DSpline(convert(Vector{FT}, xp), convert(Vector{FT}, fp), bc)
+end
+
+# Generic type-stable build_spline helper
+function build_spline(
+    ::Type{T},
     xp,
     fp;
     bc::String = "error",
     k::Int = 1,
-    method::Symbol = :Spline1D,
-    return_spl::Bool = false,
-    f_enhancement_factor::Union{Int, Nothing} = nothing,
-    f_p_enhancement_factor::Union{Int, Nothing} = nothing,
-)
-    if method == :pchip
-        spl = PCHIPInterpolation.Interpolator(xp, fp) # Has a continuous (but not smooth) derivative (piecewise cubic hermite interpolating polynomial, is unique so no k)
-        if bc == "error"
-
-        elseif bc == "extrapolate"
-            spl = pchip_extrapolate(spl) # allow extrapolating beyond the edges
-        end
-
-    elseif method ∈ [:pchip_smooth_derivative, :pchip_smooth]
-        spl = pchip_smooth_derivative(
-            xp,
-            fp;
-            bc = bc,
-            f_enhancement_factor = f_enhancement_factor,
-            f_p_enhancement_factor = f_p_enhancement_factor,
-        ) # how our current implementation works
-    elseif method ∈ [:Spline1D, :Dierckx]
-        spl = Dierckx.Spline1D(xp, fp; k = k, bc = bc) # k=1 has disjoint derivative, k=2,3 is smooth in derivative but not monotonicity preserving... this is matlab pchip
+    f_enhancement_factor::Int = 1,
+    f_p_enhancement_factor::Int = 1,
+) where {T <: AbstractInterpolationMethod}
+    if T <: PCHIPInterpolationMethod
+        return build_spline(T(), xp, fp; bc = bc)
+    elseif T <: PCHIPSmoothDerivativeInterpolationMethod
+        concrete_method =
+            T(f_enhancement_factor = f_enhancement_factor, f_p_enhancement_factor = f_p_enhancement_factor)
+        return build_spline(concrete_method, xp, fp; bc = bc)
+    elseif T <: DierckxSpline1DInterpolationMethod
+        concrete_method = T(k)
+        return build_spline(concrete_method, xp, fp; bc = bc)
+    elseif T <: FastLinear1DInterpolationMethod
+        return build_spline(T(), xp, fp; bc = bc)
     else
-        error("method not recognized")
-    end
-    if return_spl
-        return spl
-    else
-        return spl.(vec(x)) # have to broadcast bc pchip requires it...
+        error("Unknown interpolation method type: $T")
     end
 end
+
+
+# --------------------------------------------------------------------------------------------------------------------------------------------- #
+
+# Generic interpolate function [[ Not type stable ]]
+# Evaluate at x for each type
+function interpolate_1d(x, xp, fp, method::PCHIPInterpolationMethod; bc::String = "error")
+    spl = build_spline(method, xp, fp; bc = bc)
+    return spl.(x)
+end
+
+function interpolate_1d(x, xp, fp, method::PCHIPSmoothDerivativeInterpolationMethod; bc::String = "error")
+    spl = build_spline(method, xp, fp; bc = bc)
+    return spl.(x)
+end
+
+function interpolate_1d(x, xp, fp, method::DierckxSpline1DInterpolationMethod; bc::String = "error")
+    spl = build_spline(method, xp, fp; bc = bc)
+    return spl.(x)
+end
+
+function interpolate_1d(x, xp, fp, method::FastLinear1DInterpolationMethod; bc::String = "error")
+    spl = build_spline(method, xp, fp; bc = bc)
+    return spl.(x)
+end
+
+# interpolate_1d(x, xp, fp; method::AbstractInterpolationMethod, bc::String="error") = interpolate_1d(x, xp, fp, method; bc=bc) # clobbered by method below
+
+
+function interpolate_1d(
+    x,
+    xp,
+    fp;
+    method::Type{<:AbstractInterpolationMethod} = FastLinear1DInterpolationMethod,
+    bc::String = "error",
+    k::Int = 1,
+    f_enhancement_factor::Int = 1,
+    f_p_enhancement_factor::Int = 1,
+    allow_Dierckx_k1_fastpath::Bool = true,
+)
+    if method <: PCHIPInterpolationMethod
+        return interpolate_1d(x, xp, fp, method(); bc = bc)
+    elseif method <: PCHIPSmoothDerivativeInterpolationMethod
+        concrete_method =
+            method(f_enhancement_factor = f_enhancement_factor, f_p_enhancement_factor = f_p_enhancement_factor)
+        return interpolate_1d(x, xp, fp, concrete_method; bc = bc)
+    elseif method <: DierckxSpline1DInterpolationMethod
+        if allow_Dierckx_k1_fastpath && (k == 1)
+            # Fast linear path (should be fewer allocs than creating the Dierckx object
+            return interpolate_1d(x, xp, fp, FastLinear1DInterpolation; bc = bc)
+        end
+        concrete_method = method(k)
+        return interpolate_1d(x, xp, fp, concrete_method; bc = bc)
+    elseif method <: FastLinear1DInterpolationMethod
+        return interpolate_1d(x, xp, fp, method(); bc = bc)
+    else
+        error("Unknown interpolation method type: $method")
+    end
+end
+
+
+# ============================================================================================================================================= #   
 
 # TODO: Turn these piecewise pchip functions into a real function object (create my own class?) so we can analytically integrate them. it's just linear, quadratic and pchip
 
@@ -87,11 +315,14 @@ function pchip_smooth_derivative(
     xp,
     fp;
     bc::String = "error",
-    f_enhancement_factor::Union{Int, Nothing} = nothing,
-    f_p_enhancement_factor::Union{Int, Nothing} = nothing,
+    # f_enhancement_factor::Union{Int, Nothing} = nothing,
+    f_enhancement_factor::Int = 1,
+    # f_p_enhancement_factor::Union{Int, Nothing} = nothing,
+    f_p_enhancement_factor::Int = 1,
 )
 
-    if !isnothing(f_enhancement_factor) # increase the resolution of xp, yp by linear interpolation to get more points to constrain the smooth fcn
+    # if !isnothing(f_enhancement_factor) # increase the resolution of xp, yp by linear interpolation to get more points to constrain the smooth fcn
+    if !isone(f_enhancement_factor) # increase the resolution of xp, yp by linear interpolation to get more points to constrain the smooth fcn
         # add enhancement_factor-1 points between each point (note this can lead to inexact errors if the interpolated points can't be cast to exterior type (like range needing float but x being in int))
         xp_new = Array{eltype(xp)}(undef, length(xp) + (length(xp) - 1) * (f_enhancement_factor - 1))
         for i in 1:(length(xp) - 1)
@@ -99,7 +330,7 @@ function pchip_smooth_derivative(
                 range(xp[i], stop = xp[i + 1], length = f_enhancement_factor + 1)[1:(end - 1)]
         end
         xp_new[end] = xp[end]
-        xp, fp = xp_new, pyinterp(xp_new, xp, fp; method = :Dierckx, return_spl = false)
+        xp, fp = xp_new, interpolate_1d(xp_new, xp, fp; method = Fast1Linear1DInterpolationMethod, bc = "error")
     end
 
     # create a pchip interpolator to xp
@@ -107,7 +338,8 @@ function pchip_smooth_derivative(
     # differentiate it
     dfdx = ForwardDiff.derivative.(Ref(f_pchip_spl), xp)
 
-    if !isnothing(f_p_enhancement_factor) # increase the resolution of xp, yp by linear interpolation to get more points to constrain the smooth fcn
+    # if !isnothing(f_p_enhancement_factor) # increase the resolution of xp, yp by linear interpolation to get more points to constrain the smooth fcn
+    if !isone(f_p_enhancement_factor)
         # add enhancement_factor-1 points between each point (note this can lead to inexact errors if the interpolated points can't be cast to exterior type (like range needing float but x being in int))
         xp_new = Array{eltype(xp)}(undef, length(xp) + (length(xp) - 1) * (f_p_enhancement_factor - 1))
         for i in 1:(length(xp) - 1)
@@ -184,9 +416,9 @@ function conservative_regridder(
     yp::AbstractVector;
     bc::String = "extrapolate", # must be extrapolate to integrate outside the knots (boundary of the data)... Dierckx integral ignored silently, we use dierckx_safe_integrate() instead
     k::Int = 1,
-    method::Symbol = :Spline1D,
-    f_enhancement_factor::Union{Int, Nothing} = nothing,
-    f_p_enhancement_factor::Union{Int, Nothing} = nothing,
+    method::Type{<:AbstractInterpolationMethod} = FastLinear1DInterpolationMethod,
+    f_enhancement_factor::Int = 1,
+    f_p_enhancement_factor::Int = 1,
     integrate_method::Symbol = :invert,
     rtol = FT(1e-6),
     preserve_monotonicity::Bool = false,
@@ -203,21 +435,19 @@ function conservative_regridder(
     # at the lower and upper end we'll extrapolate as far as the previous edge
 
     # get the spline
-    spl = pyinterp(
-        x,
+    spl = build_spline(
+        method,
         xp,
         yp;
-        k = k,
         bc = bc,
-        method = method,
+        k = k,
         f_enhancement_factor = f_enhancement_factor,
         f_p_enhancement_factor = f_p_enhancement_factor,
-        return_spl = true,
     )
 
     # calculate bin edges, at the end assume the same spacing, as is if it was a cell center
     n = length(x)
-    x_edges = Vector{FT}(undef, length(x) + 1)
+    x_edges = similar(x, n + 1)
     @inbounds begin
         x_edges[1] = x[1] - (x[2] - x[1]) / 2
         for i in 1:(n - 1)
@@ -228,13 +458,16 @@ function conservative_regridder(
 
 
 
-    y::Vector{FT} = zeros(FT, size(x))
+    y = zero.(x)
+
     for i in 1:length(x)
         # integrate over the area of influence
 
-        if method == :Spline1D
+        if method <: DierckxSpline1DInterpolationMethod
             y[i] = dierckx_safe_integrate(spl, x_edges[i], x_edges[i + 1]; bc = bc) / (x_edges[i + 1] - x_edges[i])
-        elseif method ∈ (:pchip, :pchip_smooth_derivative, :pchip_smooth)
+        elseif method <: FastLinear1DInterpolationMethod
+            y[i] = fast1d_safe_integrate(spl, x_edges[i], x_edges[i + 1]; bc = bc) / (x_edges[i + 1] - x_edges[i])
+        elseif method isa AbstractPCHIPInterpolationMethod
             # we don't have a good way to interpolate the pchip output fcn bc it's piecewise, so we integrate it numerically
             # y[i] =
             #     Integrals.solve(
@@ -316,7 +549,7 @@ function conservative_regridder(
 
         # inversion can be leaky, resolve if asked (:integrate is by definition not leaky since it's just the original integral of the spline.)
         if enforce_conservation
-            if method == :Spline1D
+            if method <: DierckxSpline1DInterpolationMethod
                 total =
                     dierckx_safe_integrate(Dierckx.Spline1D(x, y; k = k, bc = bc), x_edges[1], x_edges[end]; bc = bc)
                 if !iszero(total)
@@ -324,7 +557,14 @@ function conservative_regridder(
                 else
                     # we can't really do much here, maybe y is supposed to be nonzero but sum to zero, maybe not... who knows
                 end
-            elseif method ∈ (:pchip, :pchip_smooth_derivative, :pchip_smooth)
+            elseif method <: FastLinear1DInterpolationMethod
+                total = fast1d_safe_integrate(FastLinear1DSpline(x, y; bc = bc), x_edges[1], x_edges[end]; bc = bc)
+                if !iszero(total)
+                    y *= fast1d_safe_integrate(spl, x_edges[1], x_edges[end]; bc = bc) / total # this is the total mass of the original data
+                else
+                    # we can't really do much here, maybe y is supposed to be nonzero but sum to zero, maybe not... who knows
+                end
+            elseif method <: AbstractPCHIPInterpolationMethod
                 # total =
                 #     Integrals.solve(
                 #         Integrals.IntegralProblem((x, p) -> spl(x), (x_edges[1], x_edges[end])),
@@ -333,11 +573,6 @@ function conservative_regridder(
                 error(
                     "Conservative interpolation not yet supported for pchip due to compatibility issues with Integrals.jl vs 3.9, and 4.0, and other SciML packages like DiffEqBase.jl. Consider creating a version that relies on analytical solutions for extrapolation and pchip's integrate method inside.",
                 )
-                if !iszero(total)
-                    y *= dierckx_safe_integrate(spl, x_edges[1], x_edges[end]; bc = bc) / total # this is the total mass of the original data
-                else
-                    # we can't really do much here, maybe y is supposed to be nonzero but sum to zero, maybe not... who knows
-                end
             end
         end
 
@@ -363,7 +598,7 @@ E.g.
 
     x_edges = [0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5]
 
-    spl = pyinterp(_, x, y; spl_kwargs... return_spl = true)
+    spl = interpolate_1d(_, x, y; spl_kwargs... return_spl = true)
     masses = [first(Integrals.QuadGK.quadgk(spl, x_edges[i], x_edges[i+1])) for i in 1:(length(x_edges)-1)]
 
     x_new = [ 1.5, 3.5, 5.5]
@@ -399,7 +634,7 @@ function conservative_spline_values(
     ;
     bc::String = "extrapolate",
     k::Int = 1,
-    method::Symbol = :Spline1D,
+    method::Type{<:AbstractInterpolationMethod} = FastLinear1DInterpolationMethod,
     return_spl::Bool = false,
     f_enhancement_factor::Union{Int, Nothing} = nothing,
     f_p_enhancement_factor::Union{Int, Nothing} = nothing,
@@ -462,14 +697,14 @@ function get_conservative_A(
     xc::AbstractVector{FT};
     bc::String = "extrapolate",
     k::Int = 1,
-    method::Symbol = :Spline1D,
-    f_enhancement_factor::Union{Int, Nothing} = nothing,
-    f_p_enhancement_factor::Union{Int, Nothing} = nothing,
+    method::Type{<:AbstractInterpolationMethod} = FastLinear1DInterpolationMethod,
+    f_enhancement_factor::Int = 1,
+    f_p_enhancement_factor::Int = 1,
 ) where {FT}
 
     # calculate bin edges, at the end assume the same spacing, as is if it was a cell center
     n = length(xc)
-    xf = Vector{FT}(undef, length(xc) + 1)
+    xf = similar(xc, n + 1)
     @inbounds begin
         xf[1] = xc[1] - (xc[2] - xc[1]) / 2
         for i in 1:(n - 1)
@@ -488,28 +723,30 @@ function get_conservative_A(
     for j in 1:n
         ej = zeros(FT, n)
         ej[j] = FT(1.0)
-        φj = pyinterp(
-            xc, # we're not using the avlue
+        φj = build_spline(
+            method,
             xc,
             ej;
             k = k,
             bc = bc,
-            method = :Spline1D,
-            return_spl = true, # we want a spline out
             f_enhancement_factor = f_enhancement_factor,
             f_p_enhancement_factor = f_p_enhancement_factor,
         )
 
 
-        if method == :Spline1D
+        if method ∈ (DierckxSpline1DInterpolationMethod, FastLinear1DInterpolationMethod)
             width = k + 1 # Support width of each spline basis fcn [ this should push us from quadratic n^2 to linear kn ]
             i_start = max(1, j - width)
             i_end = min(n, j + width)
             for i in i_start:i_end
-                A[i, j] = dierckx_safe_integrate(φj, xf[i], xf[i + 1]; bc = bc) / (xf[i + 1] - xf[i]) # this is fast
+                if method <: FastLinear1DInterpolationMethod
+                    A[i, j] = fast1d_safe_integrate(φj, xf[i], xf[i + 1]; bc = bc) / (xf[i + 1] - xf[i]) # this is fast
+                else
+                    A[i, j] = dierckx_safe_integrate(φj, xf[i], xf[i + 1]; bc = bc) / (xf[i + 1] - xf[i]) # this is fast
+                end
             end
 
-        elseif method ∈ (:pchip, :pchip_smooth_derivative, :pchip_smooth)
+        elseif method <: AbstractPCHIPInterpolationMethod
             # for i in 1:n
             #     A[i, j] = first(Integrals.QuadGK.quadgk(φj, xf[i], xf[i + 1])) / (xf[i + 1] - xf[i]) # it could be anything so integrate (note this is very slow...)
             # end
@@ -654,6 +891,134 @@ function dierckx_safe_integrate(spl::Dierckx.Spline1D, x1::FT, x2::FT, ; bc::Str
                 #     # do nothing
             end
         end
+    end
+
+    return y
+end
+
+
+
+
+"""
+Safe integration of FastLinear1DSpline, respecting bc modes.
+"""
+function fast1d_safe_integrate(
+    spl::FastLinear1DSpline{X},
+    x1::T1,
+    x2::T2;
+    bc::String = "extrapolate",
+) where {T1 <: Real, T2 <: Real, X <: AbstractVector}
+    ST = eltype(spl.xp)
+    FT = promote_type(T1, T2, ST)
+
+    y = zero(FT)
+    xp, fp = spl.xp, spl.fp
+    N = length(xp)
+
+    # Internal derivative function
+    deriv(x) = fast1d_derivative(x, spl; bc = bc)
+
+    # # Prepare BCs as tuples
+    spl_part = nothing
+    # bc_parts::Union{Nothing, Tuple} = nothing
+    # xbs::Union{Nothing, Tuple{Vararg{FT}}} = nothing
+    # fxbs::Union{Nothing, Tuple{Vararg{FT}}} = nothing
+    # dfdxbs::Union{Nothing, Tuple{Vararg{FT}}} = nothing
+
+    bc_parts::Tuple{Vararg{Tuple{FT, FT}}} = ()
+    xbs::Tuple{Vararg{FT}} = ()
+    fxbs::Tuple{Vararg{FT}} = ()
+    dfdxbs::Tuple{Vararg{FT}} = ()
+
+
+    if x2 < xp[1]  # completely below
+        bc_parts = ((x1, x2),)
+        xbs = (xp[1],)
+        fxbs = (fp[1],)
+        dfdxbs = bc == "extrapolate" ? (deriv(xp[1]),) : dfdxbs
+        bc == "error" && error("x2 < xp[1] and bc=$bc not allowed")
+
+    elseif x1 <= xp[1] <= x2 <= xp[end]  # partially below
+        spl_part = (xp[1], x2)
+        bc_parts = ((x1, xp[1]),)
+        xbs = (xp[1],)
+        fxbs = (fp[1],)
+        dfdxbs = bc == "extrapolate" ? (deriv(xp[1]),) : dfdxbs
+        bc == "error" && (x1 < xp[1]) && error("x1 < xp[1] and bc=$bc not allowed")
+
+    elseif xp[1] <= x1 && x2 <= xp[end]  # completely inside
+        return fast1d_integrate_internal(spl, x1, x2)
+
+    elseif xp[1] <= x1 <= xp[end] <= x2  # partially above
+        spl_part = (x1, xp[end])
+        bc_parts = ((xp[end], x2),)
+        xbs = (xp[end],)
+        fxbs = (fp[end],)
+        dfdxbs = bc == "extrapolate" ? (deriv(xp[end]),) : dfdxbs
+        bc == "error" && (x2 > xp[end]) && error("x2 > xp[end] and bc=$bc not allowed")
+
+    elseif xp[end] < x1  # completely above
+        bc_parts = ((x1, x2),)
+        xbs = (xp[end],)
+        fxbs = (fp[end],)
+        dfdxbs = bc == "extrapolate" ? (deriv(xp[end]),) : dfdxbs
+        bc == "error" && error("x1 > xp[end] and bc=$bc not allowed")
+
+    elseif x1 < xp[1] && xp[end] < x2  # surrounding
+        spl_part = (xp[1], xp[end])
+        bc_parts = ((x1, xp[1]), (xp[end], x2))
+        xbs = (xp[1], xp[end])
+        fxbs = (fp[1], fp[end])
+        dfdxbs = bc == "extrapolate" ? (deriv(xp[1]), deriv(xp[end])) : dfdxbs
+        bc == "error" && error("x1 < xp[1] and x2 > xp[end] and bc=$bc not allowed")
+    end
+
+    # integrate interior part
+    if !isnothing(spl_part)
+        y += fast1d_integrate_internal(spl, spl_part[1], spl_part[2])
+    end
+
+    # integrate bc parts
+    # if !isnothing(bc_parts)
+    if !isempty(bc_parts)
+        for j in eachindex(bc_parts)
+            a, b = bc_parts[j]
+            if bc == "nearest"
+                y += fxbs[j] * (b - a)
+            elseif bc == "extrapolate"
+                y += fxbs[j] * (b - a) + (dfdxbs[j] / 2) * ((b - xbs[j])^2 - (a - xbs[j])^2)
+            end
+        end
+    end
+
+    return y
+end
+
+
+# Internal integration assuming fully inside xp range
+function fast1d_integrate_internal(
+    spl::FastLinear1DSpline{X},
+    x1::T1,
+    x2::T2,
+) where {T1 <: Real, T2 <: Real, X <: AbstractVector}
+    ST = eltype(spl.xp)
+    FT = promote_type(T1, T2, ST)
+
+    xp, fp = spl.xp, spl.fp
+    N = length(xp)
+    y = zero(FT)
+
+    # Loop over each interval intersecting [x1,x2]
+    i1 = searchsortedlast(xp, x1)
+    i2 = searchsortedlast(xp, x2)
+    i1 = clamp(i1, 1, N - 1)
+    i2 = clamp(i2, 1, N - 1)
+
+    for i in i1:i2
+        xa = max(x1, xp[i])
+        xb = min(x2, xp[i + 1])
+        slope = (fp[i + 1] - fp[i]) / (xp[i + 1] - xp[i])
+        y += fp[i] * (xb - xa) + slope / 2 * (xb - xa)^2
     end
 
     return y

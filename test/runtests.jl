@@ -44,6 +44,7 @@ import Thermodynamics.Parameters as TDP
     return_old_zs = (false, true)
     conservative_interps = (false, true)
     enforce_positivitys = (false, true)
+    use_svectors = (true, true)
 
     setups = Iterators.product(
         SSCF.flight_numbers,
@@ -55,6 +56,7 @@ import Thermodynamics.Parameters as TDP
         return_old_zs,
         conservative_interps,
         enforce_positivitys,
+        use_svectors,
     )
 
     n_setups = length(setups)
@@ -67,10 +69,10 @@ import Thermodynamics.Parameters as TDP
         use_LES_output_for_z,
         return_old_z,
         conservative_interp,
-        enforce_positivity = setup
+        enforce_positivity,
+        use_svectors = setup
 
-        @info "Testing combination $i/$n_setups: flight_number=$flight_number, forcing_type=$forcing_type, initial_condition=$initial_condition, surface=$(surface), use_LES_output_for_z=$use_LES_output_for_z, return_old_z=$return_old_z, conservative_interp=$conservative_interp, enforce_positivity=$enforce_positivity"
-
+        @info "Testing combination $i/$n_setups: flight_number=$flight_number, forcing_type=$forcing_type, initial_condition=$initial_condition, surface=$(surface), use_LES_output_for_z=$use_LES_output_for_z, return_old_z=$return_old_z, conservative_interp=$conservative_interp, enforce_positivity=$enforce_positivity, use_svectors=$use_svectors"
 
 
         data = SSCF.open_atlas_les_input(flight_number, forcing_type; open_files = false)
@@ -100,6 +102,7 @@ import Thermodynamics.Parameters as TDP
                 conservative_interp = conservative_interp,
                 conservative_interp_kwargs = conservative_interp_kwargs,
                 fail_on_missing_data = false,
+                use_svectors = use_svectors,
             )
             @test true # if no error, test passes
         else

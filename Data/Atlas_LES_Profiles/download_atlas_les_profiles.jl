@@ -126,7 +126,7 @@ const SOCRATES_LES_outputs_Box_links = Dict{String, String}( # We have to save e
 """
 function download_atlas_les_inputs(;
     flight_numbers::Union{AbstractArray{Int}, Tuple{Vararg{Int}}} = flight_numbers,
-    forcing_types::Union{AbstractArray{Symbol}, Tuple{Vararg{Symbol}}} = [:obs_data],
+    forcing_types::Union{AbstractArray{Symbol}, Tuple{Vararg{Symbol}}} = (:obs_data,),
     SOCRATES_LES_inputs_Box_links::Dict{String, String} = SOCRATES_LES_inputs_Box_links,
 )
 
@@ -153,6 +153,9 @@ function download_atlas_les_inputs(;
                         uw_atlas_base_url * obs_filename,
                     ) # try box first since it's more reliable
                     for url in urls
+                        if isnothing(url)
+                            continue
+                        end
                         try
                             download(url, obs_savepath)
                             found = true
@@ -176,6 +179,9 @@ function download_atlas_les_inputs(;
                         uw_atlas_base_url * ERA5_filename,
                     )
                     for url in urls
+                        if isnothing(url)
+                            continue
+                        end
                         try
                             download(url, ERA5_savepath)
                             found = true
@@ -201,6 +207,9 @@ function download_atlas_les_inputs(;
                 uw_atlas_base_url * string(grid_height) * "level-grd.txt",
             )
             for url in urls
+                if isnothing(url)
+                    continue
+                end
                 try
                     download(url, grid_savepath)
                     found = true
@@ -230,7 +239,7 @@ end
 
 function download_atlas_les_outputs(;
     flight_numbers::Union{AbstractArray{Int}, Tuple{Vararg{Int}}} = flight_numbers,
-    forcing_types::Union{AbstractArray{Symbol}, Tuple{Vararg{Symbol}}} = [:obs_data, :ERA5_data],
+    forcing_types::Union{AbstractArray{Symbol}, Tuple{Vararg{Symbol}}} = (:obs_data, :ERA5_data),
     SOCRATES_LES_outputs_Box_links::Dict{String, String} = SOCRATES_LES_outputs_Box_links,
 )
 
@@ -263,6 +272,9 @@ function download_atlas_les_outputs(;
                         uw_atlas_base_url * obs_filename,
                     )
                     for url in urls
+                        if isnothing(url)
+                            continue
+                        end
                         try
                             download(url, obs_savepath)
                             @info "Found $(url) for $obs_savepath"
@@ -289,6 +301,9 @@ function download_atlas_les_outputs(;
                         uw_atlas_base_url * ERA5_filename,
                     )
                     for url in urls
+                        if isnothing(url)
+                            continue
+                        end
                         try
                             download(url, ERA5_savepath)
                             @info "Found $(url) for $ERA5_savepath"

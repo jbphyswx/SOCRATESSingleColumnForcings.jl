@@ -24,7 +24,7 @@ function get_data_new_z_t_LES(
     data = nothing,
     initial_condition::Bool = false,
     assume_monotonic::Bool = false,
-    interp_method::Symbol = :Spline1D,
+    interp_method::Type{<:AbstractInterpolationMethod} = FastLinear1DInterpolationMethod,
     Spline1D_interp_kwargs::Dict = Dict{Symbol, Any}(:bc => "extrapolate"), # default to extrapolate bc RF09 was run on a different grid for some reason, we're not necessarily guaranteed to have the same z
     pchip_interp_kwargs::Dict = Dict{Symbol, Any}(:bc => "extrapolate"),
     ground_indices = :end,
@@ -35,12 +35,13 @@ function get_data_new_z_t_LES(
     return_before_interp::Bool = false,
     A::Union{Array, Nothing} = nothing,
     Af::Union{Array, Nothing} = nothing,
+    use_svectors::Bool = false,
 )
 
     if conservative_interp && isnothing(A)
-        if interp_method ∈ [:Spline1D, :Dierckx]
+        if interp_method ∈ (DierckxSpline1DInterpolationMethod, FastLinear1DInterpolationMethod)
             A = get_conservative_A(z_new; method = interp_method, Spline1D_interp_kwargs...)
-        elseif interp_method ∈ [:pchip_smooth_derivative, :pchip_smooth]
+        elseif interp_method <: AbstractPCHIPInterpolationMethod
             A = get_conservative_A(z_new; method = interp_method, pchip_interp_kwargs...)
         else
             error("unsupported interpolation method")
@@ -75,6 +76,7 @@ function get_data_new_z_t_LES(
                 conservative_interp_kwargs = conservative_interp_kwargs,
                 A = A,
                 Af = Af,
+                use_svectors = use_svectors,
             )
         else
             weight = get_data_new_z_t_LES(
@@ -101,6 +103,7 @@ function get_data_new_z_t_LES(
                 conservative_interp_kwargs = conservative_interp_kwargs,
                 A = A,
                 Af = Af,
+                use_svectors = use_svectors,
             )
         end
     end
@@ -158,8 +161,8 @@ function get_data_new_z_t_LES(
     end
 
     # reverse the z so it goes from ground to top) and matches the new grid we defined.. (is this ncessary)
-    # z_old = reverse(z_old; dims = z_dim_num)
-    # vardata = reverse(vardata; dims = z_dim_num)
+    # reverse!(z_old; dims = z_dim_num)
+    # reverse!(vardata; dims = z_dim_num)
 
     if return_before_interp # short circuit and just return the preprocessed vardata
         return vardata
@@ -167,7 +170,7 @@ function get_data_new_z_t_LES(
 
     # interpolate to new z (though it should alreayd be on the new z, though I guess you could do some smoothing/rounding etc)
 
-    if interp_method ∈ [:Spline1D, :Dierckx]
+    if interp_method ∈ (DierckxSpline1DInterpolationMethod, FastLinear1DInterpolationMethod)
         vardata = var_to_new_coord(
             vardata,
             z_old,
@@ -181,8 +184,9 @@ function get_data_new_z_t_LES(
             weight = weight,
             A = A,
             Af = Af,
+            use_svectors = false, # false for internal (z interpolation)
         ) # extrapolate bc it's not a guarantee that our new z  will contain our desired z (mostly bc RF09 was run on a different grid for some reason) 
-    elseif interp_method ∈ [:pchip_smooth_derivative, :pchip_smooth]
+    elseif interp_method <: AbstractPCHIPInterpolationMethod
         vardata = var_to_new_coord(
             vardata,
             z_old,
@@ -196,6 +200,7 @@ function get_data_new_z_t_LES(
             weight = weight,
             A = A,
             Af = Af,
+            use_svectors = false,  # false for internal (z interpolation
         )
     else
         error("unsupported interpolation method")
@@ -214,9 +219,10 @@ function get_data_new_z_t_LES(
         time_dim_num;
         coord_new = nothing,
         data = data,
-        interp_method = :Spline1D, # in time, we're gonna stick to linear interpolation for now... this one maybe can be pchip since it's all within the data bounds? idk... i was getting w=0 using pchip... possibly because
+        interp_method = FastLinear1DInterpolationMethod, # in time, we're gonna stick to linear interpolation for now... this one maybe can be pchip since it's all within the data bounds? idk... i was getting w=0 using pchip... possibly because
         interp_kwargs = Spline1D_interp_kwargs,
         conservative_interp = false, # not need for conservative interp in time... maybe? it's philosophical and depends on the variable... does the time-averaged or instantaneous value matter more... However, we are just creating time splines and the timestep is up to your model... your model thus has to handle any time averaging etc...
+        use_svectors = use_svectors, # true for time interpolation
     )
 
     return vardata

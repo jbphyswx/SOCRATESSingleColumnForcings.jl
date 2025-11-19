@@ -118,21 +118,17 @@ end
 
 
 
-# function lev_to_z_from_LES_output_column(tsz, lesz, lesp; thermo_params, data, flight_number, forcing_type, interp_method = :Spline1D, interp_kwargs = Dict(:f_enhancement_factor=>1, :f_p_enhancement_factor=>1))
 function lev_to_z_from_LES_output_column(
     tsz::AbstractArray{TS},
     lesz,
     lesp;
     thermo_params::TDPS,
-    data,
-    flight_number::Int,
-    forcing_type::Symbol,
-    interp_method::Symbol = :Spline1D,
+    interp_method::AbstractInterpolationMethod = FastLinear1DInterpolation,
 ) where {TS <: TDTS}
     # Load pressure from the thermodynamic state
     p_in = TD.air_pressure.(thermo_params, tsz)
     # Interpolate z from the LES output to the pressure levels of the thermodynamic state
-    z_out = pyinterp(p_in, lesp, lesz; method = interp_method) # technically this should be upscaling not downscaling so Spline1D is probably optimal
+    z_out = interpolate_1d(p_in, lesp, lesz, interp_method; bc = "error")
     return z_out
 end
 
@@ -152,6 +148,8 @@ function lev_to_z_from_LES_output(
     forcing_type::Symbol,
     ground_indices = nothing,
 )
+
+    FTint = Float64
 
     dimnames = NC.dimnames(data["T"]) # use this as default cause calculating ts doesn't maintain dim labellings
     lev_dim_num = findfirst(x -> x == "lev", dimnames)
@@ -192,62 +190,93 @@ function lev_to_z_from_LES_output(
         t_les = LES_data["time"] # should just be seconds past initial_time
         t_les = (t_les .- t_les[1]) * (24 * 3600 * 1000) # make it relative to the start of the simulation, and convert days to miliseconds (then round, bc Dates can't handle non integer amounts)
         t_les ./= 1000 # Milliseconds to seconds
-        t_les = t_les[:]
+        t_les = NCDatasets.nomissing(t_les[:])
 
 
-        p_LES = p_LES[:] .* 100 # convert to hPa to Pa
+        p_LES = NC.nomissing(p_LES[:]) .* 100 # convert to hPa to Pa
+        z_LES = NC.nomissing(z_LES[:])
 
         # interpolate les output data to input times (instead of just choosing the `closest` hour like we did before... (need to apply by row)
-        # p_LES = pyinterp(t_in, t_les, p_LES) # i think you need to map this bc of the splines... but there's probably some way...
-        p_LES = mapslices(x -> pyinterp(t_in, t_les, x, bc = "nearest", method = :Spline1D), p_LES; dims = 2) # apply to each row, use nearest interp but outside les time bounds is bogus
+        # i think you need to map this bc of the splines... but there's probably some way...
+        p_LES =
+            mapslices(x -> interpolate_1d(t_in, t_les, x, FastLinear1DInterpolation; bc = "nearest"), p_LES; dims = 2) # apply to each row, use nearest interp but outside les time bounds is bogus
 
         tsz = ts
 
+        FTLES = eltype(z_LES)
+        FTTC =
+
         # preallocate z
-        s_tsz = collect(size(ts))
+            s_tsz = collect(size(ts))
         s_tsz[ldn] += 1 # we just want to add a single slice of zeros for the ground -- these are all ocean cases so this should be fine for now...
-        z = Array{Float64}(undef, s_tsz...) # should be same size as ts
+        z = Array{FTLES}(undef, s_tsz...) # should be same size as ts
+
+
+
 
         # iterate over columns in z (ldn)
 
         # One problem is the LES doesn't span the full range of the input... so should we do the LES for the LES range and then use the thickness equation outside that?
         increasing_p = false
+
+
+        # add one for ground
+        len = length(selectdim(p_LES, tdn_LES, 1)[:])  # number of elements in the slice
+        p_LES_t = Vector{FTLES}(undef, len)
+
+        len = length(selectdim(tsz, tdn, 1)[:])
+        tsz_t_no_g = Vector{eltype(tsz)}(undef, len) # preallocate for type stability
+        tsz_t = Vector{eltype(tsz)}(undef, len + 1)       # preallocate for type stability
+        p_in_t_no_g = Vector{FTLES}(undef, len) # preallocate for type stability
+        p_in_t = Vector{FTLES}(undef, len + 1)       # preallocate for type stability
+
         for i_t in 1:Lt
 
             # LES does not span the full range of the input, so we need to do the LES for the LES range and then use the thickness equation outside that
             # Get min/max inds for input data that are covered by LES data
 
-            tsz_t = selectdim(tsz, tdn, i_t)[:]
+            tsz_t_no_g .= selectdim(tsz, tdn, i_t)[:]
             tsgz = tsg[i_t]
-            p_in_t = TD.air_pressure.(thermo_params, tsz_t)
-            p_in_min, p_in_max = extrema(p_in_t)
 
-            p_LES_t = selectdim(p_LES, tdn_LES, i_t)[:]
+
+            p_in_t_no_g .= TD.air_pressure.(thermo_params, tsz_t_no_g[:])
+            # p_in_min, p_in_max = extrema(p_in_t_no_g)
+
+            p_LES_t .= selectdim(p_LES, tdn_LES, i_t)[:]
             p_LES_min, p_LES_max = extrema(p_LES_t)
 
             p_s_in = TD.air_pressure(thermo_params, tsgz)
 
             if isnothing(ground_indices)
-                index = searchsortedfirst(tsz_t, tsgz; by = x -> TD.air_pressure(thermo_params, x), rev = false) # find where the ground value would be inserted...
+                index = searchsortedfirst(tsz_t_no_g, tsgz; by = x -> TD.air_pressure(thermo_params, x), rev = false) # find where the ground value would be inserted...
             else
                 index = selectdim(ground_indices, tdn, i_t)[:][] # should just be one item
             end
 
             # sort them all same direction (LES to match input, and we're going with increasing_p for simplifying logic below (decreasing z))
-            increasing_p = p_in_t[1] < p_in_t[end] # if the first pressure is lower than the last, we're increasing
+            increasing_p = p_in_t_no_g[1] < p_in_t_no_g[end] # if the first pressure is lower than the last, we're increasing
             if increasing_p
-                p_LES_t = sort(p_LES_t)
-                z_LES = sort(z_LES, rev = true)
+                # sort!(p_LES_t_no_g)
+                # sort!(z_LES, rev = true)
+                p_LES_t .= sort(p_LES_t)
+                z_LES .= sort(z_LES, rev = true)
             else
-                p_in_t = reverse(p_in_t)
-                tsz_t = reverse(tsz_t)
-                p_LES_t = sort(p_LES_t)
+                # reverse!(p_in_t_no_g)
+                # reverse!(tsz_t_no_g)
+                # sort!(p_LES_t_no_g)
+                # sort!(z_LES, rev = true)
+                p_in_t_no_g .= reverse(p_in_t_no_g)
+                tsz_t_no_g .= reverse(tsz_t_no_g)
+                p_LES_t .= sort(p_LES_t)
                 z_LES = sort(z_LES, rev = true)
                 index = length(p_in_t) - index + 1 # reverse the index
             end
 
-            insert!(tsz_t, index, tsgz) # only seems to be an in place option...
-            insert!(p_in_t, index, p_s_in) # only seems to be an in place option...
+
+            # insert!(tsz_t, index, tsgz) # only seems to be an in place option...
+            # insert!(p_in_t, index, p_s_in) # only seems to be an in place option...
+            tsz_t = [tsz_t_no_g[1:(index - 1)]; tsgz; tsz_t_no_g[index:end]]
+            p_in_t = [p_in_t_no_g[1:(index - 1)]; p_s_in; p_in_t_no_g[index:end]]
 
             # (we're going increasing p direction) 
             i_t_min_p = findfirst(x -> x > p_LES_min, p_in_t) # first ind with pressure higher than the lowest pressure in the LES data (going increasing_p direction)
@@ -256,15 +285,8 @@ function lev_to_z_from_LES_output(
             squeeze(a) = dropdims(a, dims = tuple(findall(size(a) .== 1)...))
 
             # handle data covered by LES
-            selectdim(z, tdn, i_t)[i_t_min_p:i_t_max_p] = lev_to_z_from_LES_output_column(
-                tsz_t[i_t_min_p:i_t_max_p],
-                z_LES[:],
-                p_LES_t;
-                thermo_params,
-                data,
-                flight_number,
-                forcing_type,
-            )
+            selectdim(z, tdn, i_t)[i_t_min_p:i_t_max_p] =
+                lev_to_z_from_LES_output_column(tsz_t[i_t_min_p:i_t_max_p], z_LES[:], p_LES_t; thermo_params)
 
 
             # Handle z's lower than LES Data (highest pressure to sfc) | use the thickness equation
@@ -285,6 +307,7 @@ function lev_to_z_from_LES_output(
         end
 
         if !increasing_p
+            # reverse!(z, dims = ldn) # put back the way it was
             z = reverse(z, dims = ldn) # put back the way it was
         end
         return z
@@ -323,10 +346,10 @@ function lev_to_z_column(tsz; thermo_params::TDPS)
     dz = @. (R_d * Tv_bar / grav) * log(p_frac)
 
     # sum up from the bottom then subtract the height of the ground
-    z = reverse(cumsum(reverse(dz))) #cumsum(dz) # grid is already defined from  (from Grid.jl)
-    # s_sz      = collect(size(z)) # should now be same dims as T
-    # s_sz[ldn] = 1 # we just want to add a single slice of zeros for the ground -- these are all ocean cases so this should be fine for now...
-    z = [z..., 0] # is this the right order? seems so based on the cat below but idk... if so might have to flip index to be L - index or something like that? (seems to be so...)
+    # z = reverse(cumsum(reverse(dz))) #cumsum(dz) # grid is already defined from  (from Grid.jl)
+    # z = [z..., 0] # is this the right order? seems so based on the cat below but idk... if so might have to flip index to be L - index or something like that? (seems to be so...)
+    z = reverse(cumsum([0; dz]))  # start from 0 (ground), then cumulative sum up, then flip
+
     # after the padding, z for the ground should be at the right index, and we can just subtract it out from the array...
     z = z .- z[index]
     return z
@@ -512,7 +535,7 @@ function combine_air_and_ground_data(
             return insert_sorted(vardata, vardatag; by = insert_location)
         end
         vardata = cat(vardata, vardatag; dims = concat_dim)
-        vardata = mapslices(mapslice_func, vardata; dims = [concat_dim])
+        vardata = mapslices(mapslice_func, vardata; dims = (concat_dim,))
 
     elseif isa(insert_location, AbstractArray) # use provided indices to determine where to input values...
         if isa(vardatag, Number) # single value, just splice in our value
@@ -532,7 +555,7 @@ function combine_air_and_ground_data(
                 return insert!(vardata, insert_location, vardatag)
             end
             vardata = cat(vardata, vardatag, insert_location; dims = concat_dim)
-            vardata = mapslices(mapslice_func, vardata; dims = [concat_dim])
+            vardata = mapslices(mapslice_func, vardata; dims = (concat_dim,))
         end
     else
         error("unsupported input type for variable insert_location") # catch what would otherwise silently fail and return vardata
@@ -612,14 +635,14 @@ function interp_along_dim(
     data = nothing,
     data_func::Union{Function, Nothing} = nothing,
     interp_dim_in_is_full_array::Bool = true,
-    reshape_ground::Bool = true,
-    verbose::Bool = false,
-    interp_method::Symbol = :Spline1D,
+    # reshape_ground::Bool = true,
+    interp_method::Type{<:AbstractInterpolationMethod} = FastLinear1DInterpolationMethod,
     interp_kwargs::Dict = Dict{Symbol, Any}(),
     conservative_interp::Bool = false,
     conservative_interp_kwargs::DCIKT = default_conservative_interp_kwargs,
     A::Union{Nothing, AbstractArray} = nothing,
     Af::Union{Nothing, AbstractArray} = nothing,
+    use_svectors::Bool = false,
 )
     # would use kwargs but doesn't play nice w/ ODE solver for some reason... instead we get out the parameters we want explicitly and pass them all the time (splatting gives a union typle type object that apparently can't be handled?)
     f_enhancement_factor = get(interp_kwargs, :f_enhancement_factor, 1) # default to 1.0
@@ -645,13 +668,16 @@ function interp_along_dim(
         vardata = data_func(vardata)
     end
 
+    # :: interp_func(x, xp, fp;...) :: #
     if conservative_interp
         interp_func =
             (args...; kwargs...) ->
                 conservative_regridder(args...; A = A, Af = Af, conservative_interp_kwargs..., kwargs...)
     else
-        interp_func = pyinterp
+        interp_func = interpolate_1d
     end
+    conversion_func = use_svectors ? create_svector : identity
+
 
     # mapslices to apply along timedim, see https://docs.julialang.org/en/v1/base/arrays/#Base.mapslices
     if !interp_dim_in_is_full_array
@@ -667,8 +693,8 @@ function interp_along_dim(
                     d -> let d = d
                         dd -> interp_func(
                             dd,
-                            interp_dim_in,
-                            d;
+                            conversion_func(interp_dim_in),
+                            conversion_func(d);
                             method = interp_method,
                             f_enhancement_factor = f_enhancement_factor,
                             f_p_enhancement_factor = f_p_enhancement_factor,
@@ -678,8 +704,8 @@ function interp_along_dim(
                     end
                 end,
                 vardata,
-                dims = [interp_dim_num],
-            ) # will return a lambda fcn that can be evaluated along that dimensoin
+                dims = (interp_dim_num,),
+            ) # will return a lambda fcn that can be evaluated along that dimension. It's here that the svector could be meaningful
         else
             return mapslices(
                 let interp_dim_out = interp_dim_out,
@@ -692,8 +718,8 @@ function interp_along_dim(
                     # let block for performance of captured variables
                     d -> interp_func(
                         interp_dim_out,
-                        interp_dim_in,
-                        d;
+                        conversion_func(interp_dim_in),
+                        conversion_func(d);
                         method = interp_method,
                         f_enhancement_factor = f_enhancement_factor,
                         f_p_enhancement_factor = f_p_enhancement_factor,
@@ -702,8 +728,8 @@ function interp_along_dim(
                     )
                 end,
                 vardata,
-                dims = [interp_dim_num],
-            ) # lambda fcn will evaluate
+                dims = (interp_dim_num,),
+            ) # lambda fcn will evaluate, svector less meaningful
         end
     else # vectorize over input dim values as well as data (no support for vectorize over output dim yet)
         # stack on new catd dimension, then split apart inside the fcn call
@@ -721,8 +747,8 @@ function interp_along_dim(
                         d -> let d = d
                             dd -> interp_func(
                                 dd,
-                                d[:, 1],
-                                d[:, 2];
+                                conversion_func(d[:, 1]),
+                                conversion_func(d[:, 2]);
                                 method = interp_method,
                                 f_enhancement_factor = f_enhancement_factor,
                                 f_p_enhancement_factor = f_p_enhancement_factor,
@@ -732,10 +758,10 @@ function interp_along_dim(
                         end
                     end,
                     _input,
-                    dims = [interp_dim_num, catd],
+                    dims = (interp_dim_num, catd),
                 );
                 dims = catd,
-            ) # wll return a lambda fcn that can be evaluated along that dimensoin
+            ) # will return a lambda fcn that can be evaluated along that dimension, here the svector could be meaningful
         else
             return dropdims(
                 mapslices(
@@ -748,8 +774,8 @@ function interp_along_dim(
                         # let block for performance of captured variables
                         d -> interp_func(
                             interp_dim_out,
-                            d[:, 1],
-                            d[:, 2];
+                            conversion_func(d[:, 1]),
+                            conversion_func(d[:, 2]);
                             method = interp_method,
                             f_enhancement_factor = f_enhancement_factor,
                             f_p_enhancement_factor = f_p_enhancement_factor,
@@ -758,7 +784,7 @@ function interp_along_dim(
                         )
                     end,
                     _input,
-                    dims = [interp_dim_num, catd],
+                    dims = (interp_dim_num, catd),
                 );
                 dims = catd,
             ) # lambda fcn will evaluate
@@ -803,13 +829,14 @@ function var_to_new_coord(
     coord_new = nothing,
     data = nothing,
     data_func::Union{Function, Nothing} = nothing,
-    interp_method::Symbol = :Spline1D,
+    interp_method::Type{<:AbstractInterpolationMethod} = FastLinear1DInterpolationMethod,
     interp_kwargs::Dict = Dict{Symbol, Any}(),
     conservative_interp::Bool = false,
     conservative_interp_kwargs::DCIKT = default_conservative_interp_kwargs,
     weight = nothing, # for extensive variables and for conservative regridding, you may wish to weight by something like density when interpolating in z...
     A::Union{Nothing, AbstractArray} = nothing, # for extensive variables and for conservative regridding, you may wish to weight by something like density when interpolating in z...
     Af::Union{Nothing, AbstractArray} = nothing, # for extensive variables and for conservative regridding, you may wish to weight by something like density when interpolating in z...
+    use_svectors::Bool = false,
 )
     vardata = isa(var, String) ? data[var] : var
     if ~isnothing(data)
@@ -835,6 +862,7 @@ function var_to_new_coord(
             conservative_interp_kwargs = conservative_interp_kwargs,
             A = A,
             Af = Af,
+            use_svectors = use_svectors,
         )
 
     else
@@ -853,6 +881,7 @@ function var_to_new_coord(
             conservative_interp_kwargs = conservative_interp_kwargs,
             A = A,
             Af = Af,
+            use_svectors = use_svectors,
         ) ./ interp_along_dim(
             weight,
             interp_dim,
@@ -867,6 +896,7 @@ function var_to_new_coord(
             conservative_interp_kwargs = conservative_interp_kwargs,
             A = A,
             Af = Af,
+            use_svectors = use_svectors,
         )
 
     end
@@ -892,7 +922,7 @@ function get_data_new_z_t(
     data = nothing,
     initial_condition::Bool = false,
     assume_monotonic::Bool = false,
-    interp_method::Symbol = :Spline1D,
+    interp_method::Type{<:AbstractInterpolationMethod} = FastLinear1DInterpolationMethod,
     Spline1D_interp_kwargs::Dict = Dict{Symbol, Any}(),
     pchip_interp_kwargs::Dict = Dict{Symbol, Any}(),
     ground_indices = :end,
@@ -903,13 +933,14 @@ function get_data_new_z_t(
     return_before_interp::Bool = false,
     A::Union{Nothing, AbstractArray} = nothing,
     Af::Union{Nothing, AbstractArray} = nothing,
+    use_svectors::Bool = false,
 )
 
     if conservative_interp && isnothing(A)
-        if interp_method ∈ [:Spline1D, :Dierckx]
+        if interp_method ∈ (DierckxSpline1DInterpolationMethod, FastLinear1DInterpolationMethod)
             A = get_conservative_A(z_new; method = interp_method, Spline1D_interp_kwargs...)
             Af = LinearAlgebra.factorize(A)
-        elseif interp_method ∈ [:Pchip]
+        elseif interp_method <: AbstractPCHIPInterpolationMethod
             A = get_conservative_A(z_new; method = interp_method, pchip_interp_kwargs...)
             Af = LinearAlgebra.factorize(A)
         else
@@ -944,6 +975,7 @@ function get_data_new_z_t(
                 conservative_interp_kwargs = conservative_interp_kwargs,
                 A = A,
                 Af = Af,
+                use_svectors = use_svectors,
             )
         else
             weight = get_data_new_z_t(
@@ -969,6 +1001,7 @@ function get_data_new_z_t(
                 conservative_interp_kwargs = conservative_interp_kwargs,
                 A = A,
                 Af = Af,
+                use_svectors = use_svectors,
             )
         end
     end
@@ -1027,8 +1060,8 @@ function get_data_new_z_t(
     end
 
     # reverse the z so it goes from ground to top) and matches the new grid we defined..
-    z_old = reverse(z_old; dims = z_dim_num)
-    vardata = reverse(vardata; dims = z_dim_num)
+    z_old = reverse(z_old; dims = z_dim_num) # not reverse!() bc goes SubArray --> Array
+    vardata = reverse(vardata; dims = z_dim_num) # not reverse!() bc goes SubArray --> Array
 
     if return_before_interp
         return vardata
@@ -1037,7 +1070,7 @@ function get_data_new_z_t(
 
 
     # interpolate to new z
-    if interp_method ∈ [:Spline1D, :Dierckx]
+    if interp_method ∈ (DierckxSpline1DInterpolationMethod, FastLinear1DInterpolationMethod)
         vardata = var_to_new_coord(
             vardata,
             z_old,
@@ -1051,8 +1084,9 @@ function get_data_new_z_t(
             weight = weight,
             A = A,
             Af = Af,
+            use_svectors = false,  # false for internal (z interpolation)
         )
-    elseif interp_method ∈ [:pchip_smooth_derivative, :pchip_smooth]
+    elseif interp_method <: AbstractPCHIPInterpolationMethod
         vardata = var_to_new_coord(
             vardata,
             z_old,
@@ -1066,6 +1100,7 @@ function get_data_new_z_t(
             weight = weight,
             A = A,
             Af = Af,
+            use_svectors = false, # false for internal (z interpolation)
         )
     else
         error("unsupported interpolation method")
@@ -1084,9 +1119,10 @@ function get_data_new_z_t(
         time_dim_num;
         coord_new = nothing,
         data = data,
-        interp_method = :Spline1D, # in time, we're gonna stick to linear interpolation for now... this one maybe can be pchip since it's all within the data bounds? idk... i was getting w=0 using pchip... possibly because
+        interp_method = FastLinear1DInterpolationMethod, # in time, we're gonna stick to linear interpolation for now... this one maybe can be pchip since it's all within the data bounds? idk... i was getting w=0 using pchip... possibly because
         interp_kwargs = Spline1D_interp_kwargs,
         conservative_interp = false, # no need for conservation in time? maybe?
+        use_svectors = use_svectors, # potentiall true for time interpolation
     )
 
     return vardata
@@ -1100,6 +1136,9 @@ function drop_lat_lon(vardata; data = nothing, dims = nothing)
     # i guess i also don't know what happens if we've turned the time dim into just a fcn -- in principle it's last so that shouldnt hurt
 
     if isnothing(dims)
+        if isnothing(data)
+            throw(ArgumentError("You must provide `data` if `dims` is not specified"))
+        end
         dims = tuple(collect(findfirst(x -> x == dim, NC.dimnames(data["T"])) for dim in ["lat", "lon"])...) # base off temperature for now
     end
 
@@ -1122,17 +1161,17 @@ end
 Currently this is setup to just assume saturation w/ Tg 
 However, this doesn't match Atlas's simulations so maybe we'll adjust this to just be an adiabatic adjustment to the lowest datapoint we do have?
 It seems that Atlas's simulations have a slight kink at the lowest level, but otherwise are ≈ constant down to the surface if that's outside the forcing range and just interpolated if it's inside the forcing range...
-    - in that case, we should be able to just use pyinterp because Spline1D default bc is nearest outside the range
+    - in that case, we should be able to just use interpolate_1d (used to be pyinterp) because Spline1D default bc is nearest outside the range
 """
 # function calc_qg(Tg,pg; thermo_params)
-function calc_qg_extrapolate_pq(pg, p, q; interp_method = :Spline1D, interp_kawrgs...)
+function calc_qg_extrapolate_pq(pg, p, q; interp_method = FastLinear1DInterpolation)
     # pvg           = TD.saturation_vapor_pressure.(thermo_params, Tg, TD.Liquid())
     # molmass_ratio = TDP.molmass_ratio(thermo_params)
     # qg            = (1 / molmass_ratio) .* pvg ./ (pg .- pvg) #Total water mixing ratio at surface , assuming saturation [ add source ]
 
     # not sure if this should be linear in p or logarithmic (linear in z), gonna do linear in p
-    qg = pyinterp(pg, p, q, bc = "extrapolate", method = interp_method, interp_kawrgs...) # default to spline1d for extrapolation as pchip may not be the most reliable outside bounds of data.
-    # qg = pyinterp(log.(pg), log.(p), q)
+    qg = interpolate_1d(pg, p, q, interp_method; bc = "extrapolate") # default to spline1d for extrapolation as pchip may not be the most reliable outside bounds of data.
+    # qg = interpolate_1d(log.(pg), log.(p), q, interp_method; bc="extrapolate") # default to spline1d for extrapolation as pchip may not be the most reliable outside bounds of data.
 
     return qg
 end

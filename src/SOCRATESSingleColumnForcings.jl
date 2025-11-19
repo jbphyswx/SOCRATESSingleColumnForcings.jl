@@ -3,12 +3,14 @@ module SOCRATESSingleColumnForcings
 import Thermodynamics as TD
 const TDP = TD.Parameters
 import NCDatasets as NC
+using NCDatasets: NCDatasets, nomissing
 using DelimitedFiles: DelimitedFiles, readdlm
 using Statistics: Statistics, mean
 using Dierckx: Dierckx, Spline1D
 using LinearAlgebra: LinearAlgebra, factorize
 using Dates: Dates
 using Downloads: download
+using StaticArrays: StaticArrays, SVector
 
 
 resolve_nan(x::FT, val::FT = FT(0.0)) where {FT} = isnan(x) ? FT(val) : x # replace nan w/ 0
@@ -30,6 +32,25 @@ const TDTS = TD.ThermodynamicState
 # Two cases with shallow cloud-topped boundary layers, RF12 and RF13, are run on a 192-level vertical grid.
 # The other four cases have clouds extending through deeper boundary layers; they are run on a 320-level vertical grid.
 const grid_heights = Dict(1 => 320, 9 => 320, 10 => 320, 11 => 320, 12 => 192, 13 => 192)
+
+
+abstract type AbstractInterpolationMethod end
+abstract type AbstractPCHIPInterpolationMethod <: AbstractInterpolationMethod end
+struct PCHIPInterpolationMethod <: AbstractPCHIPInterpolationMethod end
+Base.@kwdef struct PCHIPSmoothDerivativeInterpolationMethod <: AbstractPCHIPInterpolationMethod
+    f_enhancement_factor::Int = 1
+    f_p_enhancement_factor::Int = 1
+end
+struct DierckxSpline1DInterpolationMethod <: AbstractInterpolationMethod
+    k::Int
+end
+struct FastLinear1DInterpolationMethod <: AbstractInterpolationMethod end
+const FastLinear1DInterpolation = FastLinear1DInterpolationMethod()
+
+
+create_svector(x::AbstractVector) = StaticArrays.SVector{length(x)}(x) # create an SVector from an array, this is the same as SVector(x...) but faster [still slow bc length(x) is looked up at compile time]
+create_svector(x::NTuple{N, FT}) where {FT, N} = StaticArrays.SVector{N, FT}(x) # create an SVector from a tuple, this is the same as SVector(x...) but faster [still slow bc length(x) is looked up at compile time]
+
 
 
 #=
