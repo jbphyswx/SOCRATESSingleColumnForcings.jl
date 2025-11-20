@@ -14,33 +14,98 @@ function fast1d_interp(
     xp::AbstractVector{T},
     fp::AbstractVector{T};
     bc::String = "error",
+    monotonic::Bool = false,
+    check_monotonic::Bool = false,
 ) where {T <: Real, TT <: Real}
+
     N = length(xp)
-    if x <= xp[1]
-        if bc == "nearest"
-            return fp[1]
-        elseif bc == "extrapolate"
-            return fp[1] + (fp[2] - fp[1]) * (x - xp[1]) / (xp[2] - xp[1])
+
+    # --- Optionally verify monotonicity (ascending OR descending) ---
+    if monotonic
+        asc = true
+        desc = true
+        if check_monotonic
+            for i in 2:N
+                if xp[i] < xp[i - 1]
+                    asc = false
+                end
+                if xp[i] > xp[i - 1]
+                    desc = false
+                end
+                if !asc && !desc
+                    error("xp must be monotonic (ascending or descending)")
+                end
+            end
         else
-            error("x = $x below interpolation range")
-        end
-    elseif x >= xp[end]
-        if bc == "nearest"
-            return fp[end]
-        elseif bc == "extrapolate"
-            return fp[end - 1] + (fp[end] - fp[end - 1]) * (x - xp[end - 1]) / (xp[end] - xp[end - 1])
-        else
-            error("x = $x above interpolation range, extrema are extrema(xp) = $(extrema(xp));") # xp = $xp; fp = $fp")
+            asc = xp[1] <= xp[end]
         end
     else
-        i = searchsortedlast(xp, x)
-        # clamp i to avoid i+1 > N
-        i = min(i, N - 1)
-        x0, x1 = xp[i], xp[i + 1]
-        y0, y1 = fp[i], fp[i + 1]
-        return y0 + (y1 - y0) * (x - x0) / (x1 - x0)
+        asc = xp[1] <= xp[end]
     end
+
+    # --- Out-of-bounds ---
+    xmin, xmax = xp[1], xp[end]
+    if asc
+        if x < xmin
+            if bc == "nearest"
+                return fp[1]
+            elseif bc == "extrapolate"
+                return fp[1] + (fp[2] - fp[1]) * (x - xp[1]) / (xp[2] - xp[1])
+            else
+                error("x = $x below interpolation range [$xmin, $xmax]")
+            end
+        elseif x > xmax
+            if bc == "nearest"
+                return fp[end]
+            elseif bc == "extrapolate"
+                return fp[end - 1] + (fp[end] - fp[end - 1]) * (x - xp[end - 1]) / (xp[end] - xp[end - 1])
+            else
+                error("x = $x above interpolation range [$xmin, $xmax]")
+            end
+        end
+    else
+        # descending grid
+        if x > xmin
+            if bc == "nearest"
+                return fp[1]
+            elseif bc == "extrapolate"
+                return fp[1] + (fp[2] - fp[1]) * (x - xp[1]) / (xp[2] - xp[1])
+            else
+                error("x = $x above interpolation range [$xmin, $xmax]")
+            end
+        elseif x < xmax
+            if bc == "nearest"
+                return fp[end]
+            elseif bc == "extrapolate"
+                return fp[end - 1] + (fp[end] - fp[end - 1]) * (x - xp[end - 1]) / (xp[end] - xp[end - 1])
+            else
+                error("x = $x below interpolation range [$xmin, $xmax]")
+            end
+        end
+    end
+
+    # --- Interval search ---
+    if asc
+        i = searchsortedlast(xp, x)
+    else
+        # descending: manual search without allocations
+        i = 1
+        while i < N && xp[i] > x
+            i += 1
+        end
+        i -= 1  # interval is xp[i] >= x >= xp[i+1]
+    end
+    i = min(max(i, 1), N - 1)
+
+    # --- Linear interpolation ---
+    x0, x1 = xp[i], xp[i + 1]
+    y0, y1 = fp[i], fp[i + 1]
+
+    return y0 + (y1 - y0) * (x - x0) / (x1 - x0)
 end
+
+
+
 
 
 function fast1d_interp!(
@@ -69,24 +134,104 @@ function fast1d_interp(
 end
 
 
-struct FastLinear1DSpline{X <: AbstractVector}
+struct Fast1DLinearInterpolant{X <: AbstractVector}
     xp::X
     fp::X
     bc::String
 end
-FastLinear1DSpline(xp::X, fp::X; bc::String = "error") where {X <: AbstractVector} = FastLinear1DSpline{X}(xp, fp, bc)
+# Fast1DLinearInterpolant(xp::X, fp::X; bc::String = "error") where {X <: AbstractVector} = Fast1DLinearInterpolant{X}(xp, fp, bc)
+
+"""
+This constructor drops collinear points to optimize storage and performance
+"""
+function Fast1DLinearInterpolant(
+    xp::X,
+    fp::X;
+    bc::String = "error",
+    drop_collinear::Bool = true,
+) where {X <: AbstractVector}
+    @assert length(xp) == length(fp) "xp and fp must have the same length"
+
+    if !drop_collinear || length(xp) <= 2
+        return Fast1DLinearInterpolant{X}(xp, fp, bc)
+    end
+
+    FT = eltype(X)
+    # Always keep first point
+    new_xp = FT[xp[1]]
+    new_fp = FT[fp[1]]
+
+    for i in 2:(length(xp) - 1)
+        # Slopes
+        slope1 = (fp[i] - fp[i - 1]) / (xp[i] - xp[i - 1])
+        slope2 = (fp[i + 1] - fp[i]) / (xp[i + 1] - xp[i])
+        if slope1 != slope2  # keep point if not collinear
+            push!(new_xp, xp[i])
+            push!(new_fp, fp[i])
+        end
+    end
+
+    # Always keep last point
+    push!(new_xp, xp[end])
+    push!(new_fp, fp[end])
+
+    # Convert back to original type
+    new_xp = X(new_xp)
+    new_fp = X(new_fp)
+    return Fast1DLinearInterpolant{X}(new_xp, new_fp, bc)
+end
+
+""" Technically not type stable, so moved to separate method """
+function Fast1DLinearInterpolant(
+    xp::X,
+    fp::X;
+    bc::String = "error",
+    drop_collinear::Bool = true,
+) where {X <: StaticArrays.StaticVector}
+    @assert length(xp) == length(fp) "xp and fp must have the same length"
+
+    if !drop_collinear || length(xp) <= 2
+        return Fast1DLinearInterpolant{X}(xp, fp, bc)
+    end
+
+    FT = eltype(X)
+
+    # Always keep first point
+    new_xp = FT[xp[1]]
+    new_fp = FT[fp[1]]
+
+    for i in 2:(length(xp) - 1)
+        # Slopes
+        slope1 = (fp[i] - fp[i - 1]) / (xp[i] - xp[i - 1])
+        slope2 = (fp[i + 1] - fp[i]) / (xp[i + 1] - xp[i])
+        if slope1 != slope2  # keep point if not collinear
+            push!(new_xp, xp[i])
+            push!(new_fp, fp[i])
+        end
+    end
+
+    # Always keep last point
+    push!(new_xp, xp[end])
+    push!(new_fp, fp[end])
+
+    # Convert back to original type
+    out_type = StaticArrays.SVector{length(new_xp), eltype(X)}
+    return Fast1DLinearInterpolant{out_type}(create_svector(new_xp)::out_type, create_svector(new_fp)::out_type, bc)
+end
+
+
 
 # Make it broadcastable (for vector or static array evaluation)
-Base.broadcastable(s::FastLinear1DSpline) = Ref(s)
+Base.broadcastable(s::Fast1DLinearInterpolant) = Ref(s)
 
 # Make it callable for scalar x
-function (s::FastLinear1DSpline)(x::T) where {T}
+function (s::Fast1DLinearInterpolant)(x::T) where {T}
     fast1d_interp(x, s.xp, s.fp; bc = s.bc)
 end
 
 function fast1d_derivative(
     x::T,
-    spl::FastLinear1DSpline{X};
+    spl::Fast1DLinearInterpolant{X};
     bc::String = "extrapolate",
 ) where {T <: Real, X <: AbstractVector{T}}
     xp, fp = spl.xp, spl.fp
@@ -121,7 +266,7 @@ end
 function fast1d_derivative!(
     y::AbstractVector{T},
     x::AbstractVector{T},
-    spl::FastLinear1DSpline{X},
+    spl::Fast1DLinearInterpolant{X},
 ) where {T <: Real, X <: AbstractVector}
     @inbounds for j in eachindex(x)
         y[j] = fast1d_derivative(x[j], spl)
@@ -129,7 +274,7 @@ function fast1d_derivative!(
     return y
 end
 # Vectorized derivative
-function fast1d_derivative(x::AbstractVector{T}, spl::FastLinear1DSpline{X}) where {T <: Real, X <: AbstractVector}
+function fast1d_derivative(x::AbstractVector{T}, spl::Fast1DLinearInterpolant{X}) where {T <: Real, X <: AbstractVector}
     y = similar(x)
     fast1d_derivative!(y, x, spl)
     return y
@@ -167,10 +312,16 @@ function build_spline(method::DierckxSpline1DInterpolationMethod, xp, fp; bc::St
 end
 
 # Build the spline for FastLinear1DInterpolationMethod
-function build_spline(::FastLinear1DInterpolationMethod, xp::X, fp::X; bc::String = "error") where {X <: AbstractVector}
+function build_spline(
+    ::FastLinear1DInterpolationMethod,
+    xp::X,
+    fp::X;
+    bc::String = "error",
+    drop_collinear::Bool = true,
+) where {X <: AbstractVector}
     # Return a closure that is broadcastable
     # return x -> fast1d_interp(x, xp, fp; bc=bc)
-    return FastLinear1DSpline(xp, fp, bc)
+    return Fast1DLinearInterpolant(xp, fp; bc = bc, drop_collinear = drop_collinear)
 end
 
 # Build the spline for FastLinear1DInterpolationMethod
@@ -179,11 +330,35 @@ function build_spline(
     xp::AbstractVector{TX},
     fp::AbstractVector{TY};
     bc::String = "error",
+    drop_collinear::Bool = true,
 ) where {TX <: Real, TY <: Real}
     # Return a closure that is broadcastable
     # return x -> fast1d_interp(x, xp, fp; bc=bc)
     FT = promote_type(TX, TY)
-    return FastLinear1DSpline(convert(Vector{FT}, xp), convert(Vector{FT}, fp), bc)
+    return Fast1DLinearInterpolant(
+        convert(Vector{FT}, xp),
+        convert(Vector{FT}, fp);
+        bc = bc,
+        drop_collinear = drop_collinear,
+    )
+end
+
+function build_spline(
+    ::FastLinear1DInterpolationMethod,
+    xp::StaticArrays.StaticVector{N, TX},
+    fp::StaticArrays.StaticVector{N, TY};
+    bc::String = "error",
+    drop_collinear::Bool = true,
+) where {N, TX <: Real, TY <: Real}
+    # Return a closure that is broadcastable
+    # return x -> fast1d_interp(x, xp, fp; bc=bc)
+    FT = promote_type(TX, TY)
+    return Fast1DLinearInterpolant(
+        convert(StaticArrays.SVector{N, FT}, xp),
+        convert(StaticArrays.SVector{N, FT}, fp);
+        bc = bc,
+        drop_collinear = drop_collinear,
+    )
 end
 
 # Generic type-stable build_spline helper
@@ -195,6 +370,7 @@ function build_spline(
     k::Int = 1,
     f_enhancement_factor::Int = 1,
     f_p_enhancement_factor::Int = 1,
+    drop_collinear::Bool = true,
 ) where {T <: AbstractInterpolationMethod}
     if T <: PCHIPInterpolationMethod
         return build_spline(T(), xp, fp; bc = bc)
@@ -206,7 +382,7 @@ function build_spline(
         concrete_method = T(k)
         return build_spline(concrete_method, xp, fp; bc = bc)
     elseif T <: FastLinear1DInterpolationMethod
-        return build_spline(T(), xp, fp; bc = bc)
+        return build_spline(T(), xp, fp; bc = bc, drop_collinear = drop_collinear)
     else
         error("Unknown interpolation method type: $T")
     end
@@ -558,7 +734,7 @@ function conservative_regridder(
                     # we can't really do much here, maybe y is supposed to be nonzero but sum to zero, maybe not... who knows
                 end
             elseif method <: FastLinear1DInterpolationMethod
-                total = fast1d_safe_integrate(FastLinear1DSpline(x, y; bc = bc), x_edges[1], x_edges[end]; bc = bc)
+                total = fast1d_safe_integrate(Fast1DLinearInterpolant(x, y; bc = bc), x_edges[1], x_edges[end]; bc = bc)
                 if !iszero(total)
                     y *= fast1d_safe_integrate(spl, x_edges[1], x_edges[end]; bc = bc) / total # this is the total mass of the original data
                 else
@@ -900,10 +1076,10 @@ end
 
 
 """
-Safe integration of FastLinear1DSpline, respecting bc modes.
+Safe integration of Fast1DLinearInterpolant, respecting bc modes.
 """
 function fast1d_safe_integrate(
-    spl::FastLinear1DSpline{X},
+    spl::Fast1DLinearInterpolant{X},
     x1::T1,
     x2::T2;
     bc::String = "extrapolate",
@@ -997,7 +1173,7 @@ end
 
 # Internal integration assuming fully inside xp range
 function fast1d_integrate_internal(
-    spl::FastLinear1DSpline{X},
+    spl::Fast1DLinearInterpolant{X},
     x1::T1,
     x2::T2,
 ) where {T1 <: Real, T2 <: Real, X <: AbstractVector}

@@ -87,8 +87,8 @@ function process_case(
             end
             return TD.PhaseEquil_pTq(thermo_params, pg, Tg, qg)
         elseif surface ∈ ["surface_conditions", "conditions", "cond"]
-            pg = vec(data[forcing_type]["Ps"])[:][initial_ind:end]
-            Tg_orig = vec(data[forcing_type]["Tg"])[:][initial_ind:end] # SST
+            pg = NCDatasets.nomissing(vec(data[forcing_type]["Ps"])[:])[initial_ind:end]
+            Tg_orig = vec(NCDatasets.nomissing(data[forcing_type]["Tg"])[:])[initial_ind:end] # SST
             Tg = Tg_orig .+ Tg_offset # might have to drop lon,lat dims or sum
             # before we were extrapolating to surface to get qg which looks ok at first but after ts 1, the LES diverges, maybe it's supposed to be going towards Tg SST
             if Tg_offset < 0  # SST > Tg, assume SST sets qg at ground level going forward and serves as a source (so use full Tg not Tg_orig)
@@ -101,7 +101,7 @@ function process_case(
                     initial_ind:size(data[forcing_type]["q"], time_dim_num),
                 ) # select our q value subset along the time dimension
                 q = vec.(collect(eachslice(q, dims = time_dim_num))) # turn our q from [lon, lat, lev, time] to a list of vectors along [lon,lat,lev] to match p
-                q = map(mr -> mr ./ (1.0 .+ mr), q) # mixing ratio to specific humidity for each vector we created in q
+                q = map(mr -> mr ./ (one(FT) .+ mr), q) # mixing ratio to specific humidity for each vector we created in q
                 qg = map((pg, q) -> calc_qg_extrapolate_pq(pg, p, q), pg, q) # map the function to get out qg for each time step
             end
 

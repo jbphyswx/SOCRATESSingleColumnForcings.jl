@@ -110,6 +110,9 @@ import Thermodynamics.Parameters as TDP
         end
     end
 
+
+    ref = SSCF.get_LES_reference_profiles(9; forcing_type = :obs_data, new_zc = nothing, new_zf = nothing)
+
     data = SSCF.process_case(9; thermo_params = thermo_params, use_LES_output_for_z = false)
     @show(data)
 

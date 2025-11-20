@@ -149,8 +149,6 @@ function lev_to_z_from_LES_output(
     ground_indices = nothing,
 )
 
-    FTint = Float64
-
     dimnames = NC.dimnames(data["T"]) # use this as default cause calculating ts doesn't maintain dim labellings
     lev_dim_num = findfirst(x -> x == "lev", dimnames)
     ldn = lev_dim_num
@@ -204,21 +202,16 @@ function lev_to_z_from_LES_output(
         tsz = ts
 
         FTLES = eltype(z_LES)
-        FTTC =
 
         # preallocate z
-            s_tsz = collect(size(ts))
+        s_tsz = collect(size(ts))
         s_tsz[ldn] += 1 # we just want to add a single slice of zeros for the ground -- these are all ocean cases so this should be fine for now...
         z = Array{FTLES}(undef, s_tsz...) # should be same size as ts
-
-
-
 
         # iterate over columns in z (ldn)
 
         # One problem is the LES doesn't span the full range of the input... so should we do the LES for the LES range and then use the thickness equation outside that?
         increasing_p = false
-
 
         # add one for ground
         len = length(selectdim(p_LES, tdn_LES, 1)[:])  # number of elements in the slice
@@ -230,6 +223,7 @@ function lev_to_z_from_LES_output(
         p_in_t_no_g = Vector{FTLES}(undef, len) # preallocate for type stability
         p_in_t = Vector{FTLES}(undef, len + 1)       # preallocate for type stability
 
+
         for i_t in 1:Lt
 
             # LES does not span the full range of the input, so we need to do the LES for the LES range and then use the thickness equation outside that
@@ -237,7 +231,6 @@ function lev_to_z_from_LES_output(
 
             tsz_t_no_g .= selectdim(tsz, tdn, i_t)[:]
             tsgz = tsg[i_t]
-
 
             p_in_t_no_g .= TD.air_pressure.(thermo_params, tsz_t_no_g[:])
             # p_in_min, p_in_max = extrema(p_in_t_no_g)
@@ -256,22 +249,15 @@ function lev_to_z_from_LES_output(
             # sort them all same direction (LES to match input, and we're going with increasing_p for simplifying logic below (decreasing z))
             increasing_p = p_in_t_no_g[1] < p_in_t_no_g[end] # if the first pressure is lower than the last, we're increasing
             if increasing_p
-                # sort!(p_LES_t_no_g)
-                # sort!(z_LES, rev = true)
-                p_LES_t .= sort(p_LES_t)
-                z_LES .= sort(z_LES, rev = true)
+                sort!(p_LES_t)
+                sort!(z_LES, rev = true)
             else
-                # reverse!(p_in_t_no_g)
-                # reverse!(tsz_t_no_g)
-                # sort!(p_LES_t_no_g)
-                # sort!(z_LES, rev = true)
-                p_in_t_no_g .= reverse(p_in_t_no_g)
-                tsz_t_no_g .= reverse(tsz_t_no_g)
-                p_LES_t .= sort(p_LES_t)
-                z_LES = sort(z_LES, rev = true)
+                reverse!(p_in_t_no_g)
+                reverse!(tsz_t_no_g)
+                sort!(p_LES_t)
+                sort!(z_LES, rev = true)
                 index = length(p_in_t) - index + 1 # reverse the index
             end
-
 
             # insert!(tsz_t, index, tsgz) # only seems to be an in place option...
             # insert!(p_in_t, index, p_s_in) # only seems to be an in place option...
@@ -310,6 +296,7 @@ function lev_to_z_from_LES_output(
             # reverse!(z, dims = ldn) # put back the way it was
             z = reverse(z, dims = ldn) # put back the way it was
         end
+
         return z
     else
         error("not implemented")
@@ -348,7 +335,15 @@ function lev_to_z_column(tsz; thermo_params::TDPS)
     # sum up from the bottom then subtract the height of the ground
     # z = reverse(cumsum(reverse(dz))) #cumsum(dz) # grid is already defined from  (from Grid.jl)
     # z = [z..., 0] # is this the right order? seems so based on the cat below but idk... if so might have to flip index to be L - index or something like that? (seems to be so...)
-    z = reverse(cumsum([0; dz]))  # start from 0 (ground), then cumulative sum up, then flip
+
+    # Preallocate output
+    L = length(dz)
+    # z = zeros(eltype(dz), L+1)  # last element = ground
+    z = similar(dz, L + 1)  # last element = ground
+    z[end] = eltype(dz)(0)  # set ground level to 0
+    for i in L:-1:1 # # Fill from top down
+        z[i] = z[i + 1] + dz[i]
+    end
 
     # after the padding, z for the ground should be at the right index, and we can just subtract it out from the array...
     z = z .- z[index]
@@ -678,11 +673,10 @@ function interp_along_dim(
     end
     conversion_func = use_svectors ? create_svector : identity
 
-
     # mapslices to apply along timedim, see https://docs.julialang.org/en/v1/base/arrays/#Base.mapslices
     if !interp_dim_in_is_full_array
         if isnothing(interp_dim_out)
-            return mapslices(
+            out = mapslices(
                 let interp_dim_in = interp_dim_in,
                     interp_method = interp_method,
                     f_enhancement_factor = f_enhancement_factor,
@@ -690,24 +684,50 @@ function interp_along_dim(
                     bc = bc,
                     k = k
                     # let block for performance of captured variables
+
                     d -> let d = d
-                        dd -> interp_func(
-                            dd,
+                        # dd -> interp_func(
+                        #     dd,
+                        #     conversion_func(interp_dim_in),
+                        #     conversion_func(d);
+                        #     method = interp_method,
+                        #     f_enhancement_factor = f_enhancement_factor,
+                        #     f_p_enhancement_factor = f_p_enhancement_factor,
+                        #     bc = bc,
+                        #     k = k,
+                        # )
+                        build_spline(
+                            interp_method,
                             conversion_func(interp_dim_in),
                             conversion_func(d);
-                            method = interp_method,
                             f_enhancement_factor = f_enhancement_factor,
                             f_p_enhancement_factor = f_p_enhancement_factor,
                             bc = bc,
                             k = k,
-                        )
+                            drop_collinear = false, # messes w/ mapslices inference
+                        ) # is already a fcn
                     end
                 end,
                 vardata,
                 dims = (interp_dim_num,),
             ) # will return a lambda fcn that can be evaluated along that dimension. It's here that the svector could be meaningful
+
+            if (drop_collinear = true) &&
+               (conversion_func == create_svector) &&
+               (interp_method <: FastLinear1DInterpolationMethod) # try to do the reduction in post
+                out_type = (SSCF.Fast1DLinearInterpolant{<:StaticArrays.SVector{N, Float64}} where {N}) # broader
+                # create empty array of correct type
+                out_new = Array{out_type}(undef, size(out)...)
+                for i in eachindex(out)
+                    out_new[i] = Fast1DLinearInterpolant(out[i].xp, out[i].fp; bc = out[i].bc, drop_collinear = true)
+                end
+                return out_new
+            end
+
+            return out
+
         else
-            return mapslices(
+            out = mapslices(
                 let interp_dim_out = interp_dim_out,
                     interp_dim_in = interp_dim_in,
                     interp_method = interp_method,
@@ -730,13 +750,27 @@ function interp_along_dim(
                 vardata,
                 dims = (interp_dim_num,),
             ) # lambda fcn will evaluate, svector less meaningful
+
+            if (drop_collinear = true) &&
+               (conversion_func == create_svector) &&
+               (interp_method <: FastLinear1DInterpolationMethod) # try to do the reduction in post
+                out_type = (SSCF.Fast1DLinearInterpolant{<:StaticArrays.SVector{N, Float64}} where {N}) # broader
+                # create empty array of correct type
+                out_new = Array{out_type}(undef, size(out)...)
+                for i in eachindex(out)
+                    out_new[i] = Fast1DLinearInterpolant(out[i].xp, out[i].fp; bc = out[i].bc, drop_collinear = true)
+                end
+                return out_new
+            end
+
+            return out
         end
     else # vectorize over input dim values as well as data (no support for vectorize over output dim yet)
         # stack on new catd dimension, then split apart inside the fcn call
         catd = ndims(vardata) + 1
         _input = cat(interp_dim_in, vardata; dims = catd) # although maybe the input is just a vector in which case this won't work..... we could just pass it in
         if isnothing(interp_dim_out)
-            return dropdims(
+            out = dropdims(
                 mapslices(
                     let interp_method = interp_method,
                         f_enhancement_factor = f_enhancement_factor,
@@ -745,16 +779,25 @@ function interp_along_dim(
                         k = k
                         # let block for performance of captured variables
                         d -> let d = d
-                            dd -> interp_func(
-                                dd,
+                            # dd -> interp_func(
+                            #     dd,
+                            #     conversion_func(d[:, 1]),
+                            #     conversion_func(d[:, 2]);
+                            #     method = interp_method,
+                            #     f_enhancement_factor = f_enhancement_factor,
+                            #     f_p_enhancement_factor = f_p_enhancement_factor,
+                            #     bc = bc,
+                            #     k = k,
+                            # )
+                            build_spline(
+                                interp_method,
                                 conversion_func(d[:, 1]),
                                 conversion_func(d[:, 2]);
-                                method = interp_method,
                                 f_enhancement_factor = f_enhancement_factor,
                                 f_p_enhancement_factor = f_p_enhancement_factor,
                                 bc = bc,
                                 k = k,
-                            )
+                            ) # is already a fcn
                         end
                     end,
                     _input,
@@ -762,8 +805,22 @@ function interp_along_dim(
                 );
                 dims = catd,
             ) # will return a lambda fcn that can be evaluated along that dimension, here the svector could be meaningful
+
+            if (drop_collinear = true) &&
+               (conversion_func == create_svector) &&
+               (interp_method <: FastLinear1DInterpolationMethod) # try to do the reduction in post
+                out_type = (SSCF.Fast1DLinearInterpolant{<:StaticArrays.SVector{N, Float64}} where {N}) # broader
+                # create empty array of correct type
+                out_new = Array{out_type}(undef, size(out)...)
+                for i in eachindex(out)
+                    out_new[i] = Fast1DLinearInterpolant(out[i].xp, out[i].fp; bc = out[i].bc, drop_collinear = true)
+                end
+                return out_new
+            end
+
+            return out
         else
-            return dropdims(
+            out = dropdims(
                 mapslices(
                     let interp_dim_out = interp_dim_out,
                         interp_method = interp_method,
@@ -788,6 +845,20 @@ function interp_along_dim(
                 );
                 dims = catd,
             ) # lambda fcn will evaluate
+
+            if (drop_collinear = true) &&
+               (conversion_func == create_svector) &&
+               (interp_method <: FastLinear1DInterpolationMethod) # try to do the reduction in post
+                out_type = (SSCF.Fast1DLinearInterpolant{<:StaticArrays.SVector{N, Float64}} where {N}) # broader
+                # create empty array of correct type
+                out_new = Array{out_type}(undef, size(out)...)
+                for i in eachindex(out)
+                    out_new[i] = Fast1DLinearInterpolant(out[i].xp, out[i].fp; bc = out[i].bc, drop_collinear = true)
+                end
+                return out_new
+            end
+
+            return out
         end
     end
 end
@@ -1113,6 +1184,7 @@ function get_data_new_z_t(
 
     # i thnk here should be t_old[initial_ind:end] -- we want to keep only from initial condition timestep
     # when creating the splines, should we use t_old[initial_ind:end] .- t_old[initial_ind]? since the time in the model callling will always start @ t=0
+
     vardata = var_to_new_coord(
         vardata,
         t_old[initial_ind:end] .- t_old[initial_ind],
@@ -1122,7 +1194,7 @@ function get_data_new_z_t(
         interp_method = FastLinear1DInterpolationMethod, # in time, we're gonna stick to linear interpolation for now... this one maybe can be pchip since it's all within the data bounds? idk... i was getting w=0 using pchip... possibly because
         interp_kwargs = Spline1D_interp_kwargs,
         conservative_interp = false, # no need for conservation in time? maybe?
-        use_svectors = use_svectors, # potentiall true for time interpolation
+        use_svectors = use_svectors, # potentially true for time interpolation
     )
 
     return vardata
