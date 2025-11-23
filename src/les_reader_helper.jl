@@ -25,8 +25,8 @@ function get_data_new_z_t_LES(
     initial_condition::Bool = false,
     assume_monotonic::Bool = false,
     interp_method::Type{<:AbstractInterpolationMethod} = FastLinear1DInterpolationMethod,
-    Spline1D_interp_kwargs::Dict = Dict{Symbol, Any}(:bc => "extrapolate"), # default to extrapolate bc RF09 was run on a different grid for some reason, we're not necessarily guaranteed to have the same z
-    pchip_interp_kwargs::Dict = Dict{Symbol, Any}(:bc => "extrapolate"),
+    Spline1D_interp_kwargs::Dict = Dict{Symbol, Any}(:bc => ExtrapolateBoundaryCondition()), # default to extrapolate bc RF09 was run on a different grid for some reason, we're not necessarily guaranteed to have the same z
+    pchip_interp_kwargs::Dict = Dict{Symbol, Any}(:bc => ExtrapolateBoundaryCondition()),
     ground_indices = :end,
     conservative_interp::Bool = false,
     conservative_interp_kwargs::DCIKT = default_conservative_interp_kwargs,

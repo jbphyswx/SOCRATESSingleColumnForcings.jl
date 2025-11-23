@@ -112,19 +112,19 @@ function process_case(
             # in this interpolation, tsec has to be adjusted to our offsets no? or we clip e.g. pg to be pg[initial_ind:end], tsec would also need to be adjusted no?, subtract the value at initial_ind i guess...
             return (;
                 pg = let tg = tg, pg = pg # let block for performance of captured variables
-                    t -> interpolate_1d(t, tg, pg, FastLinear1DInterpolation; bc = "extrapolate")
+                    t -> interpolate_1d(t, tg, pg, FastLinear1DInterpolation; bc = ExtrapolateBoundaryCondition())
                 end,
                 Tg = let tg = tg, Tg = Tg # let block for performance of captured variables
-                    t -> interpolate_1d(t, tg, Tg, FastLinear1DInterpolation; bc = "extrapolate")
+                    t -> interpolate_1d(t, tg, Tg, FastLinear1DInterpolation; bc = ExtrapolateBoundaryCondition())
                 end,
                 Tsfc = let tg = tg, Tg = Tg_orig # let block for performance of captured variables [ we need to store the SST -- while it's true qg can be calculated from Tg initially, for correct sensible and latent heat fluxes we need the actual ground temp value ]
-                    t -> interpolate_1d(t, tg, Tg, FastLinear1DInterpolation; bc = "extrapolate")
+                    t -> interpolate_1d(t, tg, Tg, FastLinear1DInterpolation; bc = ExtrapolateBoundaryCondition())
                 end,
                 qg = let tg = tg, qg = qg # let block for performance of captured variables
-                    t -> interpolate_1d(t, tg, qg, FastLinear1DInterpolation; bc = "extrapolate")
+                    t -> interpolate_1d(t, tg, qg, FastLinear1DInterpolation; bc = ExtrapolateBoundaryCondition())
                 end,
                 qsfc = let tg = tg, qg = qg_orig # let block for performance of captured variables # this is the q* of the Tsfc, the actual ground value. However I'm not sure we should actually use this as our surface q, evaporation from sfc will pull us towards it.
-                    t -> interpolate_1d(t, tg, qg, FastLinear1DInterpolation; bc = "extrapolate")
+                    t -> interpolate_1d(t, tg, qg, FastLinear1DInterpolation; bc = ExtrapolateBoundaryCondition())
                 end,
             ) # would use ref and broadcast but doesnt convert back to array
         else
@@ -347,8 +347,12 @@ function process_case(
                 It would be nice if the calls to get_data_new_z_t() could update a global cache but the cache shouldn't persist out side of this fcn, we'll just do it manually here
         =#
 
-        A_cache[FastLinear1DInterpolation] =
-            get_conservative_A(new_z[:dTdt_rad]; method = FastLinear1DInterpolationMethod, k = 1, bc = "extrapolate") # all the zs are the same, just take 1..
+        A_cache[FastLinear1DInterpolation] = get_conservative_A(
+            new_z[:dTdt_rad];
+            method = FastLinear1DInterpolationMethod,
+            k = 1,
+            bc = ExtrapolateBoundaryCondition(),
+        ) # all the zs are the same, just take 1..
         Af_cache[FastLinear1DInterpolation] = LinearAlgebra.factorize(A_cache[FastLinear1DInterpolation]) # storing the cache offers a 300-1000x speedup, since the factorization is the most expensive part...
 
     end

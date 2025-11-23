@@ -33,6 +33,37 @@ const TDTS = TD.ThermodynamicState
 # The other four cases have clouds extending through deeper boundary layers; they are run on a 320-level vertical grid.
 const grid_heights = Dict(1 => 320, 9 => 320, 10 => 320, 11 => 320, 12 => 192, 13 => 192)
 
+# Singleton BC types
+abstract type AbstractBoundaryCondition end
+struct ExtrapolateBoundaryCondition <: AbstractBoundaryCondition end
+struct ErrorBoundaryCondition <: AbstractBoundaryCondition end
+struct NearestBoundaryCondition <: AbstractBoundaryCondition end
+
+const ValidBoundaryConditions = Union{ExtrapolateBoundaryCondition, ErrorBoundaryCondition, NearestBoundaryCondition}
+
+# string for instances
+bc_string(::ExtrapolateBoundaryCondition) = "extrapolate"
+bc_string(::ErrorBoundaryCondition) = "error"
+bc_string(::NearestBoundaryCondition) = "nearest"
+
+# --- create_bc chain ---
+
+create_bc(x::AbstractBoundaryCondition) = x # pass through
+create_bc(s::String) = create_bc(Symbol(lowercase(strip(s))))
+create_bc(s::Symbol) = create_bc(Val(s))
+
+# valid BCs
+create_bc(::Val{:extrapolate}) = ExtrapolateBoundaryCondition()
+create_bc(::Val{:error}) = ErrorBoundaryCondition()
+create_bc(::Val{:nearest}) = NearestBoundaryCondition()
+
+# fallback (dynamic, no extra functions)
+
+create_bc(::Val{s}) where {s} = error(
+    "Invalid boundary condition symbol: $s. Valid options are " *
+    repr((T -> string(T())).(Base.uniontypes(ValidBoundaryConditions))),
+)
+
 
 abstract type AbstractInterpolationMethod end
 abstract type AbstractPCHIPInterpolationMethod <: AbstractInterpolationMethod end
@@ -44,8 +75,10 @@ end
 struct DierckxSpline1DInterpolationMethod <: AbstractInterpolationMethod
     k::Int
 end
-struct FastLinear1DInterpolationMethod <: AbstractInterpolationMethod end
+struct FastLinear1DInterpolationMethod <: AbstractInterpolationMethod end # Consider repalcing one day with Interpolations.jl - That has Linear() NoInterp() and Throw() BCs... and can hold SVectors and be isbits etc. Notably, however, integration is missing natively so we'd have to implement it, but `Interpolations.gradient()` is provided for the derivative
 const FastLinear1DInterpolation = FastLinear1DInterpolationMethod()
+
+# struct InterpolaionsJLMethod <: AbstractInterpolationMethod end # Has so many methods
 
 
 create_svector(x::AbstractVector) = StaticArrays.SVector{length(x)}(x) # create an SVector from an array, this is the same as SVector(x...) but faster [still slow bc length(x) is looked up at compile time]

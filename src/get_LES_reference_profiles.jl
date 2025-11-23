@@ -59,17 +59,17 @@ function get_LES_reference_profiles(
     ps = LES_data["Ps"][1] * 100.0 # surface pressure
     ρ = NC.nomissing(LES_data["RHO"][:, 1]) # use t=0 as our reference
     # extrapolate to get ρs since that's not given (not calculating from first principles probably is safer too w/ uncertainty in q)
-    ρs = interpolate_1d(ps, reverse(p), reverse(ρ), FastLinear1DInterpolation, bc = "extrapolate") # switch to increasing for interpolation
+    ρs = interpolate_1d(ps, reverse(p), reverse(ρ), FastLinear1DInterpolation, bc = ExtrapolateBoundaryCondition()) # switch to increasing for interpolation
 
     # Consider switching to SVector but probably not worth it for now since the high res grids can have 320 levels
     p = [ps; p]
     ρ = [ρs; ρ]
     z = [0; z]
 
-    p_c = interpolate_1d(new_zc, z, p, FastLinear1DInterpolation; bc = "nearest")
-    p_f = interpolate_1d(new_zf, z, p, FastLinear1DInterpolation; bc = "nearest")
-    ρ_c = interpolate_1d(new_zc, z, ρ, FastLinear1DInterpolation; bc = "nearest")
-    ρ_f = interpolate_1d(new_zf, z, ρ, FastLinear1DInterpolation; bc = "nearest")
+    p_c = interpolate_1d(new_zc, z, p, FastLinear1DInterpolation; bc = NearestBoundaryCondition())
+    p_f = interpolate_1d(new_zf, z, p, FastLinear1DInterpolation; bc = NearestBoundaryCondition())
+    ρ_c = interpolate_1d(new_zc, z, ρ, FastLinear1DInterpolation; bc = NearestBoundaryCondition())
+    ρ_f = interpolate_1d(new_zf, z, ρ, FastLinear1DInterpolation; bc = NearestBoundaryCondition())
 
     return NamedTuple{return_values}((p_c, p_f, ρ_c, ρ_f))
 

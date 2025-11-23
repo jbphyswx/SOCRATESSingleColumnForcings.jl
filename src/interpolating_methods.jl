@@ -13,10 +13,10 @@ function fast1d_interp(
     x::TT,
     xp::AbstractVector{T},
     fp::AbstractVector{T};
-    bc::String = "error",
+    bc::BCT = ErrorBoundaryCondition(),
     monotonic::Bool = false,
     check_monotonic::Bool = false,
-) where {T <: Real, TT <: Real}
+) where {T <: Real, TT <: Real, BCT <: ValidBoundaryConditions}
 
     N = length(xp)
 
@@ -47,17 +47,17 @@ function fast1d_interp(
     xmin, xmax = xp[1], xp[end]
     if asc
         if x < xmin
-            if bc == "nearest"
+            if bc isa NearestBoundaryCondition
                 return fp[1]
-            elseif bc == "extrapolate"
+            elseif bc isa ExtrapolateBoundaryCondition
                 return fp[1] + (fp[2] - fp[1]) * (x - xp[1]) / (xp[2] - xp[1])
             else
                 error("x = $x below interpolation range [$xmin, $xmax]")
             end
         elseif x > xmax
-            if bc == "nearest"
+            if bc isa NearestBoundaryCondition
                 return fp[end]
-            elseif bc == "extrapolate"
+            elseif bc isa ExtrapolateBoundaryCondition
                 return fp[end - 1] + (fp[end] - fp[end - 1]) * (x - xp[end - 1]) / (xp[end] - xp[end - 1])
             else
                 error("x = $x above interpolation range [$xmin, $xmax]")
@@ -66,17 +66,17 @@ function fast1d_interp(
     else
         # descending grid
         if x > xmin
-            if bc == "nearest"
+            if bc isa NearestBoundaryCondition
                 return fp[1]
-            elseif bc == "extrapolate"
+            elseif bc isa ExtrapolateBoundaryCondition
                 return fp[1] + (fp[2] - fp[1]) * (x - xp[1]) / (xp[2] - xp[1])
             else
                 error("x = $x above interpolation range [$xmin, $xmax]")
             end
         elseif x < xmax
-            if bc == "nearest"
+            if bc isa NearestBoundaryCondition
                 return fp[end]
-            elseif bc == "extrapolate"
+            elseif bc isa ExtrapolateBoundaryCondition
                 return fp[end - 1] + (fp[end] - fp[end - 1]) * (x - xp[end - 1]) / (xp[end] - xp[end - 1])
             else
                 error("x = $x below interpolation range [$xmin, $xmax]")
@@ -113,8 +113,8 @@ function fast1d_interp!(
     x::AbstractVector{TT},
     xp::AbstractVector{T},
     fp::AbstractVector{T};
-    bc::String = "error",
-) where {T <: Real, TT <: Real}
+    bc::BCT = ErrorBoundaryCondition(),
+) where {T <: Real, TT <: Real, BCT <: ValidBoundaryConditions}
     @inbounds for j in eachindex(x)
         y[j] = fast1d_interp(x[j], xp, fp; bc = bc)
     end
@@ -126,20 +126,19 @@ function fast1d_interp(
     x::AbstractVector{TT},
     xp::AbstractVector{T},
     fp::AbstractVector{T};
-    bc::String = "error",
-) where {T <: Real, TT <: Real}
+    bc::BCT = ErrorBoundaryCondition(),
+) where {T <: Real, TT <: Real, BCT <: ValidBoundaryConditions}
     y = similar(x)
     fast1d_interp!(y, x, xp, fp; bc = bc)
     return y
 end
 
 
-struct Fast1DLinearInterpolant{X <: AbstractVector}
+struct Fast1DLinearInterpolant{X <: AbstractVector, BCT <: ValidBoundaryConditions}
     xp::X
     fp::X
-    bc::String
+    bc::BCT
 end
-# Fast1DLinearInterpolant(xp::X, fp::X; bc::String = "error") where {X <: AbstractVector} = Fast1DLinearInterpolant{X}(xp, fp, bc)
 
 """
 This constructor drops collinear points to optimize storage and performance
@@ -147,16 +146,16 @@ This constructor drops collinear points to optimize storage and performance
 function Fast1DLinearInterpolant(
     xp::X,
     fp::X;
-    bc::String = "error",
+    bc::BCT = ErrorBoundaryCondition(),
     drop_collinear::Bool = true,
-) where {X <: AbstractVector}
+) where {X <: AbstractVector, BCT <: ValidBoundaryConditions}
     @assert length(xp) == length(fp) "xp and fp must have the same length"
 
     if !drop_collinear || length(xp) <= 2
-        return Fast1DLinearInterpolant{X}(xp, fp, bc)
+        return Fast1DLinearInterpolant{X, BCT}(xp, fp, bc)
     end
 
-    FT = eltype(X)
+    # FT = eltype(X)
     # Always keep first point
     new_xp = FT[xp[1]]
     new_fp = FT[fp[1]]
@@ -178,20 +177,20 @@ function Fast1DLinearInterpolant(
     # Convert back to original type
     new_xp = X(new_xp)
     new_fp = X(new_fp)
-    return Fast1DLinearInterpolant{X}(new_xp, new_fp, bc)
+    return Fast1DLinearInterpolant{X, BCT}(new_xp, new_fp, bc)
 end
 
 """ Technically not type stable, so moved to separate method """
 function Fast1DLinearInterpolant(
     xp::X,
     fp::X;
-    bc::String = "error",
+    bc::BCT = ErrorBoundaryCondition(),
     drop_collinear::Bool = true,
-) where {X <: StaticArrays.StaticVector}
+) where {X <: StaticArrays.StaticVector, BCT <: ValidBoundaryConditions}
     @assert length(xp) == length(fp) "xp and fp must have the same length"
 
     if !drop_collinear || length(xp) <= 2
-        return Fast1DLinearInterpolant{X}(xp, fp, bc)
+        return Fast1DLinearInterpolant{X, BCT}(xp, fp, bc)
     end
 
     FT = eltype(X)
@@ -216,14 +215,18 @@ function Fast1DLinearInterpolant(
 
     # Convert back to original type
     out_type = StaticArrays.SVector{length(new_xp), eltype(X)}
-    return Fast1DLinearInterpolant{out_type}(create_svector(new_xp)::out_type, create_svector(new_fp)::out_type, bc)
+    return Fast1DLinearInterpolant{out_type, BCT}(
+        create_svector(new_xp)::out_type,
+        create_svector(new_fp)::out_type,
+        bc,
+    )
 end
-
-
 
 # Make it broadcastable (for vector or static array evaluation)
 Base.broadcastable(s::Fast1DLinearInterpolant) = Ref(s)
 
+change_bc(sp::Fast1DLinearInterpolant{X, BCTO}, new_bc::BCTN) where {X <: AbstractVector, BCTO <: ValidBoundaryConditions, BCTN <: ValidBoundaryConditions} =
+    Fast1DLinearInterpolant{X, BCTN}(sp.xp, sp.fp, new_bc) # returns a new object, I guess you could use accessor or setfield or whatever
 # Make it callable for scalar x
 function (s::Fast1DLinearInterpolant)(x::T) where {T}
     fast1d_interp(x, s.xp, s.fp; bc = s.bc)
@@ -231,24 +234,25 @@ end
 
 function fast1d_derivative(
     x::T,
-    spl::Fast1DLinearInterpolant{X};
-    bc::String = "extrapolate",
-) where {T <: Real, X <: AbstractVector{T}}
+    spl::Fast1DLinearInterpolant{X, BCT};
+) where {T <: Real, X <: AbstractVector{T}, BCT <: ValidBoundaryConditions}
     xp, fp = spl.xp, spl.fp
     N = length(xp)
 
+    bc = spl.bc
+
     if x < xp[1]
-        if bc == "nearest"
+        if bc isa NearestBoundaryCondition
             return zero(T)
-        elseif bc == "extrapolate"
+        elseif bc isa ExtrapolateBoundaryCondition
             return (fp[2] - fp[1]) / (xp[2] - xp[1])
         else
             error("x = $x below interpolation range and bc=$bc")
         end
     elseif x > xp[end]
-        if bc == "nearest"
+        if bc isa NearestBoundaryCondition
             return zero(T)
-        elseif bc == "extrapolate"
+        elseif bc isa ExtrapolateBoundaryCondition
             return (fp[end] - fp[end - 1]) / (xp[end] - xp[end - 1])
         else
             error("x = $x above interpolation range and bc=$bc")
@@ -264,17 +268,17 @@ end
 
 
 function fast1d_derivative!(
-    y::AbstractVector{T},
-    x::AbstractVector{T},
-    spl::Fast1DLinearInterpolant{X},
-) where {T <: Real, X <: AbstractVector}
+    y::AbstractVector{T}, # output array
+    x::AbstractVector{T}, # derivative locations
+    spl::Fast1DLinearInterpolant{X, BCT},
+) where {T <: Real, X <: AbstractVector, BCT <: ValidBoundaryConditions}
     @inbounds for j in eachindex(x)
         y[j] = fast1d_derivative(x[j], spl)
     end
     return y
 end
 # Vectorized derivative
-function fast1d_derivative(x::AbstractVector{T}, spl::Fast1DLinearInterpolant{X}) where {T <: Real, X <: AbstractVector}
+function fast1d_derivative(x::AbstractVector{T}, spl::Fast1DLinearInterpolant{X, BCT}) where {T <: Real, X <: AbstractVector, BCT <: ValidBoundaryConditions}
     y = similar(x)
     fast1d_derivative!(y, x, spl)
     return y
@@ -285,18 +289,30 @@ end
 # ============================================================================================================================================= #   
 
 # Build the spline for PCHIP
-function build_spline(method::PCHIPInterpolationMethod, xp, fp; bc::String = "error")
+function build_spline(
+    method::PCHIPInterpolationMethod,
+    xp,
+    fp;
+    bc::BCT = ErrorBoundaryCondition(),
+) where {BCT <: ValidBoundaryConditions}
     spl = PCHIPInterpolation.Interpolator(xp, fp)
-    if bc == "error"
+    if bc isa ErrorBoundaryCondition
         error("Not implemented: pchip with bc=\"error\"")
-    elseif bc == "extrapolate"
+    elseif bc isa ExtrapolateBoundaryCondition
         spl = pchip_extrapolate(spl)
+    else
+        error("Unsupported boundary condition type for PCHIP: $bc")
     end
     return spl
 end
 
 # Build the spline for PCHIPSmoothDerivative
-function build_spline(method::PCHIPSmoothDerivativeInterpolationMethod, xp, fp; bc::String = "error")
+function build_spline(
+    method::PCHIPSmoothDerivativeInterpolationMethod,
+    xp,
+    fp;
+    bc::BCT = ErrorBoundaryCondition(),
+) where {BCT <: ValidBoundaryConditions}
     return pchip_smooth_derivative(
         xp,
         fp;
@@ -307,8 +323,13 @@ function build_spline(method::PCHIPSmoothDerivativeInterpolationMethod, xp, fp; 
 end
 
 # Build the spline for DierckxSpline1D
-function build_spline(method::DierckxSpline1DInterpolationMethod, xp, fp; bc::String = "error")
-    return Dierckx.Spline1D(xp, fp; k = method.k, bc = bc)
+function build_spline(
+    method::DierckxSpline1DInterpolationMethod,
+    xp,
+    fp;
+    bc::BCT = ErrorBoundaryCondition(),
+) where {BCT <: ValidBoundaryConditions}
+    return Dierckx.Spline1D(xp, fp; k = method.k, bc = bc_string(bc))
 end
 
 # Build the spline for FastLinear1DInterpolationMethod
@@ -316,9 +337,9 @@ function build_spline(
     ::FastLinear1DInterpolationMethod,
     xp::X,
     fp::X;
-    bc::String = "error",
+    bc::BCT = ErrorBoundaryCondition(),
     drop_collinear::Bool = true,
-) where {X <: AbstractVector}
+) where {X <: AbstractVector, BCT <: ValidBoundaryConditions}
     # Return a closure that is broadcastable
     # return x -> fast1d_interp(x, xp, fp; bc=bc)
     return Fast1DLinearInterpolant(xp, fp; bc = bc, drop_collinear = drop_collinear)
@@ -329,9 +350,9 @@ function build_spline(
     ::FastLinear1DInterpolationMethod,
     xp::AbstractVector{TX},
     fp::AbstractVector{TY};
-    bc::String = "error",
+    bc::BCT = ErrorBoundaryCondition(),
     drop_collinear::Bool = true,
-) where {TX <: Real, TY <: Real}
+) where {TX <: Real, TY <: Real, BCT <: ValidBoundaryConditions}
     # Return a closure that is broadcastable
     # return x -> fast1d_interp(x, xp, fp; bc=bc)
     FT = promote_type(TX, TY)
@@ -347,9 +368,9 @@ function build_spline(
     ::FastLinear1DInterpolationMethod,
     xp::StaticArrays.StaticVector{N, TX},
     fp::StaticArrays.StaticVector{N, TY};
-    bc::String = "error",
+    bc::BCT = ErrorBoundaryCondition(),
     drop_collinear::Bool = true,
-) where {N, TX <: Real, TY <: Real}
+) where {N, TX <: Real, TY <: Real, BCT <: ValidBoundaryConditions}
     # Return a closure that is broadcastable
     # return x -> fast1d_interp(x, xp, fp; bc=bc)
     FT = promote_type(TX, TY)
@@ -366,12 +387,12 @@ function build_spline(
     ::Type{T},
     xp,
     fp;
-    bc::String = "error",
+    bc::BCT = ErrorBoundaryCondition(),
     k::Int = 1,
     f_enhancement_factor::Int = 1,
     f_p_enhancement_factor::Int = 1,
     drop_collinear::Bool = true,
-) where {T <: AbstractInterpolationMethod}
+) where {T <: AbstractInterpolationMethod, BCT <: ValidBoundaryConditions}
     if T <: PCHIPInterpolationMethod
         return build_spline(T(), xp, fp; bc = bc)
     elseif T <: PCHIPSmoothDerivativeInterpolationMethod
@@ -393,27 +414,50 @@ end
 
 # Generic interpolate function [[ Not type stable ]]
 # Evaluate at x for each type
-function interpolate_1d(x, xp, fp, method::PCHIPInterpolationMethod; bc::String = "error")
+function interpolate_1d(
+    x,
+    xp,
+    fp,
+    method::PCHIPInterpolationMethod;
+    bc::BCT = ErrorBoundaryCondition(),
+) where {BCT <: ValidBoundaryConditions}
     spl = build_spline(method, xp, fp; bc = bc)
     return spl.(x)
 end
 
-function interpolate_1d(x, xp, fp, method::PCHIPSmoothDerivativeInterpolationMethod; bc::String = "error")
+function interpolate_1d(
+    x,
+    xp,
+    fp,
+    method::PCHIPSmoothDerivativeInterpolationMethod;
+    bc::BCT = ErrorBoundaryCondition(),
+) where {BCT <: ValidBoundaryConditions}
     spl = build_spline(method, xp, fp; bc = bc)
     return spl.(x)
 end
 
-function interpolate_1d(x, xp, fp, method::DierckxSpline1DInterpolationMethod; bc::String = "error")
+function interpolate_1d(
+    x,
+    xp,
+    fp,
+    method::DierckxSpline1DInterpolationMethod;
+    bc::BCT = ErrorBoundaryCondition(),
+) where {BCT <: ValidBoundaryConditions}
     spl = build_spline(method, xp, fp; bc = bc)
     return spl.(x)
 end
 
-function interpolate_1d(x, xp, fp, method::FastLinear1DInterpolationMethod; bc::String = "error")
+function interpolate_1d(
+    x,
+    xp,
+    fp,
+    method::FastLinear1DInterpolationMethod;
+    bc::BCT = ErrorBoundaryCondition(),
+) where {BCT <: ValidBoundaryConditions}
     spl = build_spline(method, xp, fp; bc = bc)
     return spl.(x)
 end
 
-# interpolate_1d(x, xp, fp; method::AbstractInterpolationMethod, bc::String="error") = interpolate_1d(x, xp, fp, method; bc=bc) # clobbered by method below
 
 
 function interpolate_1d(
@@ -421,12 +465,12 @@ function interpolate_1d(
     xp,
     fp;
     method::Type{<:AbstractInterpolationMethod} = FastLinear1DInterpolationMethod,
-    bc::String = "error",
+    bc::BCT = ErrorBoundaryCondition(),
     k::Int = 1,
     f_enhancement_factor::Int = 1,
     f_p_enhancement_factor::Int = 1,
     allow_Dierckx_k1_fastpath::Bool = true,
-)
+) where {BCT <: ValidBoundaryConditions}
     if method <: PCHIPInterpolationMethod
         return interpolate_1d(x, xp, fp, method(); bc = bc)
     elseif method <: PCHIPSmoothDerivativeInterpolationMethod
@@ -485,17 +529,17 @@ We can also reduce rounding by boosting linear interpolation between the given d
 Essentially:
     f_enhancement_factor: How closely the outcome matches linear interpolation between the data points. How rounded can the curve be?
     f_p_enhancement_factor: How closely the outcome matches the spline fit of f_p (possibly enhanced) -- i.e. does it cut corners or actually go to the points like the spline does?
-# To Do: Support bc = "nearest" and bc = "NaN" for nearest neighbor and NaN respectively outside the bounds of xp
+# To Do: Support bc = NearestBoundaryCondition() and bc = FixedValueBoundaryCondition() for nearest neighbor and NaN respectively outside the bounds of xp
 """
 function pchip_smooth_derivative(
     xp,
     fp;
-    bc::String = "error",
+    bc::BCT = ErrorBoundaryCondition(),
     # f_enhancement_factor::Union{Int, Nothing} = nothing,
     f_enhancement_factor::Int = 1,
     # f_p_enhancement_factor::Union{Int, Nothing} = nothing,
     f_p_enhancement_factor::Int = 1,
-)
+) where {BCT <: ValidBoundaryConditions}
 
     # if !isnothing(f_enhancement_factor) # increase the resolution of xp, yp by linear interpolation to get more points to constrain the smooth fcn
     if !isone(f_enhancement_factor) # increase the resolution of xp, yp by linear interpolation to get more points to constrain the smooth fcn
@@ -506,7 +550,7 @@ function pchip_smooth_derivative(
                 range(xp[i], stop = xp[i + 1], length = f_enhancement_factor + 1)[1:(end - 1)]
         end
         xp_new[end] = xp[end]
-        xp, fp = xp_new, interpolate_1d(xp_new, xp, fp; method = Fast1Linear1DInterpolationMethod, bc = "error")
+        xp, fp = xp_new, interpolate_1d(xp_new, xp, fp; method = Fast1Linear1DInterpolationMethod, bc = bc)
     end
 
     # create a pchip interpolator to xp
@@ -541,11 +585,11 @@ function pchip_smooth_derivative(
     # integrate it (only takes definite bounds so we can integrate between adjacent points and then cumsum?)
     return x -> begin
         if x < xp[1] # integrate from x to x_0
-            if bc == "error"
+            if bc isa ErrorBoundaryCondition
                 error(
                     "Requested x is below the minimum x of the spline but bc is set to error, use bc=\"extrapolate\" to extrapolate",
                 )
-            elseif bc == "extrapolate"
+            elseif bc isa ExtrapolateBoundaryCondition
                 x_0 = xp[1] # aka xmin
                 Δx = x_0 - x
                 # assume derivative from x to x_0 is a line  f'(x) = x-> dfdx_min - dfp_dx_xmin * Δx, aka the second derivative is continous, the derivative is smooth | integrate to get f(x), but go from x_0 to x (so negative of x to x_0) 
@@ -554,11 +598,11 @@ function pchip_smooth_derivative(
                 error("Unsupported bc option $bc")
             end
         elseif x > xp[end] # integrate from x to x_N
-            if bc == "error"
+            if bc isa ErrorBoundaryCondition
                 error(
                     "Requested x is above the maximum x of the spline but bc is set to error, use bc=\"extrapolate\" to extrapolate",
                 )
-            elseif bc == "extrapolate"
+            elseif bc isa ExtrapolateBoundaryCondition
                 x_0 = xp[end] # aka xmax
                 Δx = x - x_0
                 ymax = ymin + PCHIPInterpolation.integrate(spl_dfdx, xp[1], xp[end]) # more accurate bc integration means you're slightly off on the right side, not sure if it's just numerical error or what
@@ -590,21 +634,21 @@ function conservative_regridder(
     x::AbstractVector,
     xp::AbstractVector,
     yp::AbstractVector;
-    bc::String = "extrapolate", # must be extrapolate to integrate outside the knots (boundary of the data)... Dierckx integral ignored silently, we use dierckx_safe_integrate() instead
+    bc::BCT = ExtrapolateBoundaryCondition(), # must be extrapolate to integrate outside the knots (boundary of the data)... Dierckx integral ignored silently, we use dierckx_safe_integrate() instead
     k::Int = 1,
     method::Type{<:AbstractInterpolationMethod} = FastLinear1DInterpolationMethod,
     f_enhancement_factor::Int = 1,
     f_p_enhancement_factor::Int = 1,
     integrate_method::Symbol = :invert,
-    rtol = FT(1e-6),
+    rtol::FT = FT(1e-6),
     preserve_monotonicity::Bool = false,
     enforce_positivity::Bool = false,
     nnls_alg::Symbol = :pivot,
-    nnls_tol = FT(1e-8),
+    nnls_tol::FT = FT(1e-8),
     enforce_conservation::Bool = true,
     A::Union{AbstractMatrix, Nothing} = nothing,
     Af::Union{AbstractMatrix, Nothing} = nothing,
-) where {}
+) where {BCT <: ValidBoundaryConditions}
 
     # Build the spline
     # each node gets the mean of the spline over its area of influence, which we'll define as being the nearest neighbor
@@ -642,7 +686,7 @@ function conservative_regridder(
         if method <: DierckxSpline1DInterpolationMethod
             y[i] = dierckx_safe_integrate(spl, x_edges[i], x_edges[i + 1]; bc = bc) / (x_edges[i + 1] - x_edges[i])
         elseif method <: FastLinear1DInterpolationMethod
-            y[i] = fast1d_safe_integrate(spl, x_edges[i], x_edges[i + 1]; bc = bc) / (x_edges[i + 1] - x_edges[i])
+            y[i] = fast1d_safe_integrate(spl, x_edges[i], x_edges[i + 1]) / (x_edges[i + 1] - x_edges[i])
         elseif method isa AbstractPCHIPInterpolationMethod
             # we don't have a good way to interpolate the pchip output fcn bc it's piecewise, so we integrate it numerically
             # y[i] =
@@ -726,17 +770,21 @@ function conservative_regridder(
         # inversion can be leaky, resolve if asked (:integrate is by definition not leaky since it's just the original integral of the spline.)
         if enforce_conservation
             if method <: DierckxSpline1DInterpolationMethod
-                total =
-                    dierckx_safe_integrate(Dierckx.Spline1D(x, y; k = k, bc = bc), x_edges[1], x_edges[end]; bc = bc)
+                total = dierckx_safe_integrate(
+                    Dierckx.Spline1D(x, y; k = k, bc = bc_string(bc)),
+                    x_edges[1],
+                    x_edges[end];
+                    bc = bc,
+                )
                 if !iszero(total)
                     y *= dierckx_safe_integrate(spl, x_edges[1], x_edges[end]; bc = bc) / total # this is the total mass of the original data
                 else
                     # we can't really do much here, maybe y is supposed to be nonzero but sum to zero, maybe not... who knows
                 end
             elseif method <: FastLinear1DInterpolationMethod
-                total = fast1d_safe_integrate(Fast1DLinearInterpolant(x, y; bc = bc), x_edges[1], x_edges[end]; bc = bc)
+                total = fast1d_safe_integrate(Fast1DLinearInterpolant(x, y; bc = bc), x_edges[1], x_edges[end])
                 if !iszero(total)
-                    y *= fast1d_safe_integrate(spl, x_edges[1], x_edges[end]; bc = bc) / total # this is the total mass of the original data
+                    y *= fast1d_safe_integrate(spl, x_edges[1], x_edges[end]) / total # this is the total mass of the original data
                 else
                     # we can't really do much here, maybe y is supposed to be nonzero but sum to zero, maybe not... who knows
                 end
@@ -762,6 +810,55 @@ function conservative_regridder(
     return y
 
 end
+
+
+# ----------------------------------------------------------------
+# xc_from_xf! (in-place)
+# ----------------------------------------------------------------
+function xc_from_xf!(xc::AbstractVector{T}, xf::AbstractVector{T}) where {T <: AbstractFloat}
+    N = length(xf)
+    @assert length(xc) == N - 1
+    @inbounds for i in 1:(N - 1)
+        xc[i] = (xf[i] + xf[i + 1]) * T(0.5)
+    end
+    return xc
+end
+
+# ----------------------------------------------------------------
+# xc_from_xf (allocating)
+# ----------------------------------------------------------------
+function xc_from_xf(xf::AbstractVector{T}) where {T <: AbstractFloat}
+    N = length(xf)
+    xc = similar(xf, N - 1)
+    xc_from_xf!(xc, xf)
+end
+
+# ----------------------------------------------------------------
+# xf_from_xc! (in-place)
+# ----------------------------------------------------------------
+function xf_from_xc!(xf::AbstractVector{T}, xc::AbstractVector{T}) where {T <: AbstractFloat}
+    N = length(xc)
+    @assert length(xf) == N + 1
+    @inbounds begin
+        for i in 1:(N - 1)
+            xf[i + 1] = (xc[i] + xc[i + 1]) * T(0.5)
+        end
+        xf[1] = xc[1] - (xc[2] - xc[1]) * T(0.5)
+        xf[N + 1] = xc[N] + (xc[N] - xc[N - 1]) * T(0.5)
+    end
+    return xf
+end
+
+# ----------------------------------------------------------------
+# xf_from_xc (allocating)
+# ----------------------------------------------------------------
+function xf_from_xc(xc::AbstractVector{T}) where {T <: AbstractFloat}
+    N = length(xc)
+    xf = similar(xc, N + 1)
+    xf_from_xc!(xf, xc)
+end
+
+
 
 
 """
@@ -808,22 +905,22 @@ function conservative_spline_values(
     xf::AbstractVector{FT},
     mc::AbstractVector{FT2},
     ;
-    bc::String = "extrapolate",
+    bc::BCT = ExtrapolateBoundaryCondition(),
     k::Int = 1,
     method::Type{<:AbstractInterpolationMethod} = FastLinear1DInterpolationMethod,
     return_spl::Bool = false,
     f_enhancement_factor::Union{Int, Nothing} = nothing,
     f_p_enhancement_factor::Union{Int, Nothing} = nothing,
-    rtol = FT(1e-6),
+    rtol::FT = FT(1e-6),
     enforce_positivity::Bool = false,
     nnls_alg::Symbol = :pivot,
-    nnls_tol = FT(1e-8),
+    nnls_tol::FT = FT(1e-8),
     A::Union{AbstractMatrix, Nothing} = nothing,
     Af::Union{AbstractMatrix, Nothing} = nothing,
     yc::Union{AbstractVector{FT2}, Nothing} = nothing,
-) where {FT, FT2}
+) where {FT <: Real, FT2 <: Real, BCT <: ValidBoundaryConditions}
 
-    xc = FT(0.5) .* (xf[1:(end - 1)] .+ xf[2:end])
+    xc = xc_from_xf(xf)
 
     if (isnothing(Af) && !enforce_positivity) || (isnothing(A) && enforce_positivity) # we want to use Af because it's faster unless we are in enforce_positivity mode bc the NNLS solver can't use a factorization
         if isnothing(A)
@@ -869,14 +966,126 @@ function conservative_spline_values(
 end
 
 
+"""
+2D version
+"""
+function conservative_spline_values(
+    xf::AbstractVector{FT},
+    mc::AbstractMatrix{FT}, # this is the mass concentration, either a vector or a matrix
+    ;
+    bc::BCT = ExtrapolateBoundaryCondition(),
+    k::Int = 1,
+    method::Type{<:AbstractInterpolationMethod} = FastLinear1DInterpolationMethod,
+    return_spl::Bool = false,
+    f_enhancement_factor::Union{Int, Nothing} = nothing,
+    f_p_enhancement_factor::Union{Int, Nothing} = nothing,
+    rtol::FT = FT(1e-6),
+    enforce_positivity::Bool = false,
+    nnls_alg::Symbol = :pivot,
+    nnls_tol::FT = FT(1e-8), # default for Float64 in package
+    A::Union{AbstractMatrix, Nothing} = nothing,
+    Af::Union{AbstractMatrix, Nothing} = nothing,
+    yc::Union{AbstractMatrix{FT2}, Nothing} = nothing,
+    inplace::Bool = false, # if true, we modify mc inplace and return nothing, otherwise we return the modified mc
+) where {FT <: Real, FT2 <: Real, BCT <: ValidBoundaryConditions}
+
+    n = length(xf) - 1
+    nx = n
+    xc = xc_from_xf(xf)
+
+    squeeze_y::Bool = false # if mc is a vector, we will squeeze it back to a vector later
+    if ndims(mc) == 1
+        mc = reshape(mc, n, 1) # make it a column vector if it's a vector [does this mess w/ inplace? idk...] doesn't reassign any memory, iguess you can pass in mc as a view if you really want to be inplace
+        squeeze_y = true # we'll squeeze it back later
+    end
+    nt = size(mc, 2) # number of time steps, we assume that the second dimension is the time dimension
+
+
+    # Get A
+    if (isnothing(Af) && !enforce_positivity) || (isnothing(A) && enforce_positivity) # we want to use Af because it's faster unless we are in enforce_positivity mode bc the NNLS solver can't use a factorization
+        if isnothing(A)
+            A = get_conservative_A(
+                xc;
+                bc = bc,
+                k = k,
+                method = method,
+                f_enhancement_factor = f_enhancement_factor,
+                f_p_enhancement_factor = f_p_enhancement_factor,
+            )
+        end
+        if !enforce_positivity
+            A = LinearAlgebra.factorize(A) # Replace A with its factorization for fast solves
+        end
+    else
+        if !enforce_positivity # we know Af isn't nothing bc we checked above
+            A = Af # just use the factorization if you have it
+        end
+    end
+
+
+    # Do interpolation
+    if inplace
+        yc = mc # modify mc inplace
+    else
+        yc = zeros(FT, nx, nt) # initialize yc as a zero matrix
+    end
+
+    # @time if enforce_positivity
+    if enforce_positivity # if we want to enforce positivity, we need to use a non-negative least squares solver
+        # if 0 < mean(mc) < (2 * eps(FT)^0.5)
+        # @info "mc = $(mc); mean(mc) = $(mean(mc)); eps(FT) = $(eps(FT)); 2 * eps(FT)^0.5 = $(2 * eps(FT)^0.5)"
+        if any(x -> (0 < x < 2 * eps(FT)^0.5), mean(mc, dims = 1)) # check if the mean of mc is small, if so, we should warn the user
+            @warn "mean(mc) = $(mean(mc)) < [2 * eps($FT)^0.5 = $(2 * eps(FT)^0.5)]; this is very small, NNLS may arbitarily converge to 0. Consider scaling your data to be larger."
+        end
+
+        # whereever M is 0, we dont need to solve there
+        # Probably faster for things like profiles of condensate w/ many all zero rows. qt and theta it wont help though (but we don't really use those in outputs, only in postprocessing.)
+
+        valid_inds = (!iszero).(mc) # this is a boolean vector of where mc is nonzero
+
+        # we could still do all the solves in 1 and it seemed to save about 33% but idk how that plays w/ contiguous regions...
+
+        for contiguous_region in contiguous_true_ranges(valid_inds; dim = 1) # any valid in time we keep, so check each row [dim = 1 is left behind as one column]
+            A_sub = @view A_cache[xc][contiguous_region, contiguous_region] # get the submatrix of A for the contiguous region
+            mc_sub = @view mc[contiguous_region, :] # get the subvector of mc for the contiguous region
+
+            yc[contiguous_region, :] .=
+                max.(NonNegLeastSquares.nonneg_lsq(A_sub, mc_sub; alg = nnls_alg, tol = nnls_tol), FT(0)) # Non-negative least square solver  (bound the output by 0, since some algs like :pivot can leave underflow negatives like 1e-17 in NonNegativeLeastSquares.jl). As of yet there's no inplace NNLS so we keep the braodcast w/ no preallocation
+        end
+
+    else
+        # yc = A \ mc # solve for yc
+        yc .= (Af_cache[xc] \ mc) # solve for yc using the factorization of A [we can't do contiguous regions here w/o recomputing the factorization, so we just solve the whole thing at once]
+    end
+
+    if any(!isfinite, mc)
+        error(
+            "Received invalid (non-finite) input in mc = $mc. NaNs inputs are not supported for conservative regridding because they break the matrix solve.",
+        )
+    elseif any(!isfinite, yc) # && all(isfinite, mc) # moved condition to check above
+        @error(
+            "NaN values in yc from inputs: xf = $xf; mc = $mc; bc = $bc; A = $A; k = $k; return_spl = $return_spl; enforce_positivity = $enforce_positivity; nnls_alg = $nnls_alg"
+        )
+        # set NaNs to zero  (is this good> we seemed to get from very very small numbers but idk..., like 1e-300
+        resolve_nan!(yc)
+    end
+
+    if squeeze_y
+        yc = vec(yc) # squeeze the output back to a vector if it was a vector (i.e. undo any reshape)
+    end
+
+    return xc, yc
+
+end
+
 function get_conservative_A(
     xc::AbstractVector{FT};
-    bc::String = "extrapolate",
+    bc::BCT = ExtrapolateBoundaryCondition(),
     k::Int = 1,
     method::Type{<:AbstractInterpolationMethod} = FastLinear1DInterpolationMethod,
     f_enhancement_factor::Int = 1,
     f_p_enhancement_factor::Int = 1,
-) where {FT}
+) where {FT, BCT <: ValidBoundaryConditions}
 
     # calculate bin edges, at the end assume the same spacing, as is if it was a cell center
     n = length(xc)
@@ -915,8 +1124,9 @@ function get_conservative_A(
             i_start = max(1, j - width)
             i_end = min(n, j + width)
             for i in i_start:i_end
+                # A[i, j] = safe_integrate(φj, xf[i], xf[i + 1]; bc = bc) / (xf[i + 1] - xf[i])
                 if method <: FastLinear1DInterpolationMethod
-                    A[i, j] = fast1d_safe_integrate(φj, xf[i], xf[i + 1]; bc = bc) / (xf[i + 1] - xf[i]) # this is fast
+                    A[i, j] = fast1d_safe_integrate(φj, xf[i], xf[i + 1]) / (xf[i + 1] - xf[i]) # this is fast
                 else
                     A[i, j] = dierckx_safe_integrate(φj, xf[i], xf[i + 1]; bc = bc) / (xf[i + 1] - xf[i]) # this is fast
                 end
@@ -942,9 +1152,16 @@ end
 
 
 """
-rn Dierckx doesn't respect boundary conditions mode (extrapolate, nearest etc) when integrating, so we have to do it ourselves.
+    rn Dierckx doesn't respect boundary conditions mode (extrapolate, nearest etc) when integrating, so we have to do it ourselves.
+    This differs from fast1d where the bc is respected in integration.
 """
-function dierckx_safe_integrate(spl::Dierckx.Spline1D, x1::FT, x2::FT, ; bc::String = "extrapolate") where {FT}
+function dierckx_safe_integrate(
+    spl::Dierckx.Spline1D,
+    x1::FT,
+    x2::FT,
+    ;
+    bc::BCT = ExtrapolateBoundaryCondition(),
+) where {FT, BCT <: ValidBoundaryConditions}
 
     y = FT(0)
 
@@ -963,9 +1180,9 @@ function dierckx_safe_integrate(spl::Dierckx.Spline1D, x1::FT, x2::FT, ; bc::Str
 
         xbs = (xp[1],)
         fxbs = (yp[1],)
-        if bc == "extrapolate"
+        if bc isa ExtrapolateBoundaryCondition
             dfdxbs = (Dierckx.derivative(spl, xp[1]),)
-        elseif bc == "error"
+        elseif bc isa ErrorBoundaryCondition
             error("x2 < xp[1] and bc = $bc, this is not allowed")
         end
 
@@ -975,9 +1192,9 @@ function dierckx_safe_integrate(spl::Dierckx.Spline1D, x1::FT, x2::FT, ; bc::Str
 
         xbs = (xp[1],)
         fxbs = (yp[1],)
-        if bc == "extrapolate"
+        if bc isa ExtrapolateBoundaryCondition
             dfdxbs = (Dierckx.derivative(spl, xp[1]),)
-        elseif (bc == "error") && (x1 < xp[1])
+        elseif (bc isa ErrorBoundaryCondition) && (x1 < xp[1])
             error("x1 < xp[1] and bc = $bc, this is not allowed")
         end
 
@@ -992,9 +1209,9 @@ function dierckx_safe_integrate(spl::Dierckx.Spline1D, x1::FT, x2::FT, ; bc::Str
 
         xbs = (xp[end],)
         fxbs = (yp[end],)
-        if bc == "extrapolate"
+        if (bc isa ExtrapolateBoundaryCondition)
             dfdxbs = (Dierckx.derivative(spl, xp[end]),)
-        elseif (bc == "error") && (x2 > xp[end])
+        elseif (bc isa ErrorBoundaryCondition) && (x2 > xp[end])
             error("x2 > xp[end] and bc = $bc, this is not allowed")
         end
 
@@ -1004,9 +1221,9 @@ function dierckx_safe_integrate(spl::Dierckx.Spline1D, x1::FT, x2::FT, ; bc::Str
 
         xbs = (xp[end],)
         fxbs = (yp[end],)
-        if bc == "extrapolate"
+        if (bc isa ExtrapolateBoundaryCondition)
             dfdxbs = (Dierckx.derivative(spl, xp[end]),)
-        elseif (bc == "error")
+        elseif (bc isa ErrorBoundaryCondition)
             error("x1 > xp[end] and bc = $bc, this is not allowed")
         end
 
@@ -1019,9 +1236,9 @@ function dierckx_safe_integrate(spl::Dierckx.Spline1D, x1::FT, x2::FT, ; bc::Str
         spl_part = (xp[1], xp[end])
         bc_parts = ((x1, xp[1]), (xp[end], x2))
 
-        if bc == "extrapolate"
+        if bc isa ExtrapolateBoundaryCondition
             dfdxbs = (Dierckx.derivative(spl, xp[1]), Dierckx.derivative(spl, xp[end]))
-        elseif bc == "error"
+        elseif bc isa ErrorBoundaryCondition
             error("x1 < xp[1] and x2 > xp[end] and bc = $bc, this is not allowed")
         end
 
@@ -1037,11 +1254,11 @@ function dierckx_safe_integrate(spl::Dierckx.Spline1D, x1::FT, x2::FT, ; bc::Str
     if !isnothing(bc_parts)
         for (j, bc_part) in enumerate(bc_parts)
             a, b = bc_part
-            if bc == "nearest"
+            if (bc isa NearestBoundaryCondition)
                 # This is just a constant "
 
                 y += fxbs[j] * (b - a)
-            elseif bc == "extrapolate"
+            elseif (bc isa ExtrapolateBoundaryCondition)
                 # calculate the integral using derivative and values at the edge
                 #=
                     Approximate f(x) using a linear expansion around a known point xb:
@@ -1063,8 +1280,7 @@ function dierckx_safe_integrate(spl::Dierckx.Spline1D, x1::FT, x2::FT, ; bc::Str
                 =#
                 y += (fxbs[j] * (b - a) + (dfdxbs[j] / 2) * ((b - xbs[j])^2 - (a - xbs[j])^2))
 
-                # elseif bc == "zero"
-                #     # do nothing
+
             end
         end
     end
@@ -1073,33 +1289,30 @@ function dierckx_safe_integrate(spl::Dierckx.Spline1D, x1::FT, x2::FT, ; bc::Str
 end
 
 
-
-
 """
 Safe integration of Fast1DLinearInterpolant, respecting bc modes.
+
+Unlike Dierckx, Fast1D respects boundary conditions in integration, so we do not pass bc in
 """
 function fast1d_safe_integrate(
-    spl::Fast1DLinearInterpolant{X},
+    spl::Fast1DLinearInterpolant{X, BCT},
     x1::T1,
     x2::T2;
-    bc::String = "extrapolate",
-) where {T1 <: Real, T2 <: Real, X <: AbstractVector}
+) where {T1 <: Real, T2 <: Real, X <: AbstractVector, BCT <: ValidBoundaryConditions}
     ST = eltype(spl.xp)
     FT = promote_type(T1, T2, ST)
+
+    bc = spl.bc
 
     y = zero(FT)
     xp, fp = spl.xp, spl.fp
     N = length(xp)
 
     # Internal derivative function
-    deriv(x) = fast1d_derivative(x, spl; bc = bc)
+    deriv(x) = fast1d_derivative(x, spl)
 
     # # Prepare BCs as tuples
     spl_part = nothing
-    # bc_parts::Union{Nothing, Tuple} = nothing
-    # xbs::Union{Nothing, Tuple{Vararg{FT}}} = nothing
-    # fxbs::Union{Nothing, Tuple{Vararg{FT}}} = nothing
-    # dfdxbs::Union{Nothing, Tuple{Vararg{FT}}} = nothing
 
     bc_parts::Tuple{Vararg{Tuple{FT, FT}}} = ()
     xbs::Tuple{Vararg{FT}} = ()
@@ -1111,16 +1324,16 @@ function fast1d_safe_integrate(
         bc_parts = ((x1, x2),)
         xbs = (xp[1],)
         fxbs = (fp[1],)
-        dfdxbs = bc == "extrapolate" ? (deriv(xp[1]),) : dfdxbs
-        bc == "error" && error("x2 < xp[1] and bc=$bc not allowed")
+        dfdxbs = (bc isa ExtrapolateBoundaryCondition) ? (deriv(xp[1]),) : dfdxbs
+        (bc isa ErrorBoundaryCondition) && error("x2 < xp[1] and bc=$bc not allowed")
 
     elseif x1 <= xp[1] <= x2 <= xp[end]  # partially below
         spl_part = (xp[1], x2)
         bc_parts = ((x1, xp[1]),)
         xbs = (xp[1],)
         fxbs = (fp[1],)
-        dfdxbs = bc == "extrapolate" ? (deriv(xp[1]),) : dfdxbs
-        bc == "error" && (x1 < xp[1]) && error("x1 < xp[1] and bc=$bc not allowed")
+        dfdxbs = (bc isa ExtrapolateBoundaryCondition) ? (deriv(xp[1]),) : dfdxbs
+        (bc isa ErrorBoundaryCondition) && (x1 < xp[1]) && error("x1 < xp[1] and bc=$bc not allowed")
 
     elseif xp[1] <= x1 && x2 <= xp[end]  # completely inside
         return fast1d_integrate_internal(spl, x1, x2)
@@ -1130,23 +1343,23 @@ function fast1d_safe_integrate(
         bc_parts = ((xp[end], x2),)
         xbs = (xp[end],)
         fxbs = (fp[end],)
-        dfdxbs = bc == "extrapolate" ? (deriv(xp[end]),) : dfdxbs
-        bc == "error" && (x2 > xp[end]) && error("x2 > xp[end] and bc=$bc not allowed")
+        dfdxbs = (bc isa ExtrapolateBoundaryCondition) ? (deriv(xp[end]),) : dfdxbs
+        (bc isa ErrorBoundaryCondition) && (x2 > xp[end]) && error("x2 > xp[end] and bc=$bc not allowed")
 
     elseif xp[end] < x1  # completely above
         bc_parts = ((x1, x2),)
         xbs = (xp[end],)
         fxbs = (fp[end],)
-        dfdxbs = bc == "extrapolate" ? (deriv(xp[end]),) : dfdxbs
-        bc == "error" && error("x1 > xp[end] and bc=$bc not allowed")
+        dfdxbs = (bc isa ExtrapolateBoundaryCondition) ? (deriv(xp[end]),) : dfdxbs
+        (bc isa ErrorBoundaryCondition) && error("x1 > xp[end] and bc=$bc not allowed")
 
     elseif x1 < xp[1] && xp[end] < x2  # surrounding
         spl_part = (xp[1], xp[end])
         bc_parts = ((x1, xp[1]), (xp[end], x2))
         xbs = (xp[1], xp[end])
         fxbs = (fp[1], fp[end])
-        dfdxbs = bc == "extrapolate" ? (deriv(xp[1]), deriv(xp[end])) : dfdxbs
-        bc == "error" && error("x1 < xp[1] and x2 > xp[end] and bc=$bc not allowed")
+        dfdxbs = (bc isa ExtrapolateBoundaryCondition) ? (deriv(xp[1]), deriv(xp[end])) : dfdxbs
+        (bc isa ErrorBoundaryCondition) && error("x1 < xp[1] and x2 > xp[end] and bc=$bc not allowed")
     end
 
     # integrate interior part
@@ -1159,9 +1372,9 @@ function fast1d_safe_integrate(
     if !isempty(bc_parts)
         for j in eachindex(bc_parts)
             a, b = bc_parts[j]
-            if bc == "nearest"
+            if bc isa NearestBoundaryCondition
                 y += fxbs[j] * (b - a)
-            elseif bc == "extrapolate"
+            elseif bc isa ExtrapolateBoundaryCondition
                 y += fxbs[j] * (b - a) + (dfdxbs[j] / 2) * ((b - xbs[j])^2 - (a - xbs[j])^2)
             end
         end
@@ -1173,10 +1386,10 @@ end
 
 # Internal integration assuming fully inside xp range
 function fast1d_integrate_internal(
-    spl::Fast1DLinearInterpolant{X},
+    spl::Fast1DLinearInterpolant{X, BCT},
     x1::T1,
     x2::T2,
-) where {T1 <: Real, T2 <: Real, X <: AbstractVector}
+) where {T1 <: Real, T2 <: Real, X <: AbstractVector, BCT <: ValidBoundaryConditions}
     ST = eltype(spl.xp)
     FT = promote_type(T1, T2, ST)
 
@@ -1199,3 +1412,17 @@ function fast1d_integrate_internal(
 
     return y
 end
+
+"""
+BC is only passed for Dierckx splines, Fast1D respects bc in integration already.
+"""
+safe_integrate(spl, x1::FT, x2::FT; bc = ExtrapolateBoundaryCondition()) where {FT} =
+    error("safe_integrate not implemented for spline type $(typeof(spl))")
+safe_integrate(spl::Dierckx.Spline1D, x1::FT, x2::FT; bc = ExtrapolateBoundaryCondition()) where {FT} =
+    dierckx_safe_integrate(spl, x1, x2; bc = bc)
+safe_integrate(
+    spl::Fast1DLinearInterpolant{X, BCT},
+    x1::FT,
+    x2::FT;
+    bc = ExtrapolateBoundaryCondition(),
+) where {X <: AbstractVector, BCT <: ValidBoundaryConditions, FT} = fast1d_safe_integrate(spl, x1, x2) # We do not pass bc through

@@ -128,7 +128,7 @@ function lev_to_z_from_LES_output_column(
     # Load pressure from the thermodynamic state
     p_in = TD.air_pressure.(thermo_params, tsz)
     # Interpolate z from the LES output to the pressure levels of the thermodynamic state
-    z_out = interpolate_1d(p_in, lesp, lesz, interp_method; bc = "error")
+    z_out = interpolate_1d(p_in, lesp, lesz, interp_method; bc = ErrorBoundaryCondition())
     return z_out
 end
 
@@ -196,8 +196,11 @@ function lev_to_z_from_LES_output(
 
         # interpolate les output data to input times (instead of just choosing the `closest` hour like we did before... (need to apply by row)
         # i think you need to map this bc of the splines... but there's probably some way...
-        p_LES =
-            mapslices(x -> interpolate_1d(t_in, t_les, x, FastLinear1DInterpolation; bc = "nearest"), p_LES; dims = 2) # apply to each row, use nearest interp but outside les time bounds is bogus
+        p_LES = mapslices(
+            x -> interpolate_1d(t_in, t_les, x, FastLinear1DInterpolation; bc = NearestBoundaryCondition()),
+            p_LES;
+            dims = 2,
+        ) # apply to each row, use nearest interp but outside les time bounds is bogus
 
         tsz = ts
 
@@ -643,9 +646,9 @@ function interp_along_dim(
     f_enhancement_factor = get(interp_kwargs, :f_enhancement_factor, 1) # default to 1.0
     f_p_enhancement_factor = get(interp_kwargs, :f_p_enhancement_factor, 1) # default to 1.0
     if conservative_interp
-        bc = get(interp_kwargs, :bc, "extrapolate") # default to extrapolate
+        bc::AbstractBoundaryCondition = create_bc(get(interp_kwargs, :bc, ExtrapolateBoundaryCondition())) # default to extrapolate
     else
-        bc = get(interp_kwargs, :bc, "error") # default to error
+        bc = create_bc(get(interp_kwargs, :bc, ErrorBoundaryCondition())) # default to error
     end
     k = get(interp_kwargs, :k, 1) # default to 3
 
@@ -1242,7 +1245,7 @@ function calc_qg_extrapolate_pq(pg, p, q; interp_method = FastLinear1DInterpolat
     # qg            = (1 / molmass_ratio) .* pvg ./ (pg .- pvg) #Total water mixing ratio at surface , assuming saturation [ add source ]
 
     # not sure if this should be linear in p or logarithmic (linear in z), gonna do linear in p
-    qg = interpolate_1d(pg, p, q, interp_method; bc = "extrapolate") # default to spline1d for extrapolation as pchip may not be the most reliable outside bounds of data.
+    qg = interpolate_1d(pg, p, q, interp_method; bc = ExtrapolateBoundaryCondition()) # default to spline1d for extrapolation as pchip may not be the most reliable outside bounds of data.
     # qg = interpolate_1d(log.(pg), log.(p), q, interp_method; bc="extrapolate") # default to spline1d for extrapolation as pchip may not be the most reliable outside bounds of data.
 
     return qg
