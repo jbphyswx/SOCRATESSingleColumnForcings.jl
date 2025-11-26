@@ -225,7 +225,10 @@ end
 # Make it broadcastable (for vector or static array evaluation)
 Base.broadcastable(s::Fast1DLinearInterpolant) = Ref(s)
 
-change_bc(sp::Fast1DLinearInterpolant{X, BCTO}, new_bc::BCTN) where {X <: AbstractVector, BCTO <: ValidBoundaryConditions, BCTN <: ValidBoundaryConditions} =
+change_bc(
+    sp::Fast1DLinearInterpolant{X, BCTO},
+    new_bc::BCTN,
+) where {X <: AbstractVector, BCTO <: ValidBoundaryConditions, BCTN <: ValidBoundaryConditions} =
     Fast1DLinearInterpolant{X, BCTN}(sp.xp, sp.fp, new_bc) # returns a new object, I guess you could use accessor or setfield or whatever
 # Make it callable for scalar x
 function (s::Fast1DLinearInterpolant)(x::T) where {T}
@@ -278,7 +281,10 @@ function fast1d_derivative!(
     return y
 end
 # Vectorized derivative
-function fast1d_derivative(x::AbstractVector{T}, spl::Fast1DLinearInterpolant{X, BCT}) where {T <: Real, X <: AbstractVector, BCT <: ValidBoundaryConditions}
+function fast1d_derivative(
+    x::AbstractVector{T},
+    spl::Fast1DLinearInterpolant{X, BCT},
+) where {T <: Real, X <: AbstractVector, BCT <: ValidBoundaryConditions}
     y = similar(x)
     fast1d_derivative!(y, x, spl)
     return y
