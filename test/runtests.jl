@@ -38,6 +38,11 @@ import Thermodynamics.Parameters as TDP
 
     new_zs = (nothing, FT.(1:100:4000))
 
+
+
+    # -=-=-=-=-=-=-=-=- TEST ALL COMBINATIONS -=-=-=-=-=-=-=-=-=-=--=-= #
+
+
     initial_conditions = (false, true)
     surfaces = (nothing, "reference_state", "surface_conditions")
     use_LES_output_for_zs = (false, true)
@@ -45,6 +50,36 @@ import Thermodynamics.Parameters as TDP
     conservative_interps = (false, true)
     enforce_positivitys = (false, true)
     use_svectors = (true, true)
+
+
+    # Test 2D version:
+    # function conservative_spline_values(
+    #     xf::AbstractVector{FT},
+    #     mc::AbstractMatrix{FT}, # this is the mass concentration, either a vector or a matrix
+    #     ;
+    #     bc::BCT = ExtrapolateBoundaryCondition(),
+    #     k::Int = 1,
+    #     method::Type{<:AbstractInterpolationMethod} = FastLinear1DInterpolationMethod,
+    #     return_spl::Bool = false,
+    #     f_enhancement_factor::Union{Int, Nothing} = nothing,
+    #     f_p_enhancement_factor::Union{Int, Nothing} = nothing,
+    #     rtol::FT = FT(1e-6),
+    #     enforce_positivity::Bool = false,
+    #     nnls_alg::Symbol = :pivot,
+    #     nnls_tol::FT = FT(1e-8), # default for Float64 in package
+    #     A::Union{AbstractMatrix, Nothing} = nothing,
+    #     Af::Union{AbstractMatrix, Nothing} = nothing,
+    #     yc::Union{AbstractMatrix{FT2}, Nothing} = nothing,
+    #     inplace::Bool = false, # if true, we modify mc inplace and return nothing, otherwise we return the modified mc
+    # ) where {FT <: Real, FT2 <: Real, BCT <: ValidBoundaryConditions}
+
+    SSCF.conservative_spline_values(
+        new_zs[2],
+        rand(FT, length(new_zs), 10);
+        bc = SSCF.ExtrapolateBoundaryCondition(),
+        enforce_positivity = true,
+    )
+
 
     setups = Iterators.product(
         SSCF.flight_numbers,

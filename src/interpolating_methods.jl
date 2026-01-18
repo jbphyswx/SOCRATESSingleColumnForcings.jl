@@ -635,6 +635,8 @@ This is done by integrating the spline over the area of influence of each point,
 When upsampling, this should mostly just follow the spline (though slightly diffusive -- NOTE: is there any way to stop this diffusion from the "area of influence"? i.e. to be able to retrieve the original values? not really the spline is inherently diffusive of each point's delta fcn.
 When downsampling though, you gain conservation when you otherwise would not have it.
 
+TODO: Make a 2D version of this (including support for the 2D versio of conservative_spline_values for conservative regridding in 2D) (see `conservative_interpolate() in CalibrateEDMF.HelperFuncs`
+
 """
 function conservative_regridder(
     x::AbstractVector,
@@ -905,6 +907,8 @@ E.g.
     It's also not that fast...
     
 
+    Note -- `conservative_regridder calls this method...`
+
 """
 
 function conservative_spline_values(
@@ -915,8 +919,8 @@ function conservative_spline_values(
     k::Int = 1,
     method::Type{<:AbstractInterpolationMethod} = FastLinear1DInterpolationMethod,
     return_spl::Bool = false,
-    f_enhancement_factor::Union{Int, Nothing} = nothing,
-    f_p_enhancement_factor::Union{Int, Nothing} = nothing,
+    f_enhancement_factor::Int = 1,
+    f_p_enhancement_factor::Int = 1,
     rtol::FT = FT(1e-6),
     enforce_positivity::Bool = false,
     nnls_alg::Symbol = :pivot,
@@ -971,9 +975,43 @@ function conservative_spline_values(
     return xc, yc
 end
 
+function contiguous_true_ranges(bits::BitVector)
+    len = length(bits)
+    ranges = Vector{UnitRange{Int}}()
+
+    i = 1
+    @inbounds while i <= len
+        if bits[i]
+            start = i
+            i += 1
+            while i <= len && bits[i]
+                i += 1
+            end
+            push!(ranges, start:(i - 1))
+        else
+            i += 1
+        end
+    end
+
+    return ranges
+end
+
+function contiguous_true_ranges(mat::BitArray{2}; dim::Int = 1)
+    # build a 1D Bool mask of length = size(mat, dim)
+    mask = if dim == 1
+        BitVector(any(mat[i, :]) for i in 1:size(mat, 1)) # in each row, any true [ so output is along the column ]
+    elseif dim == 2
+        BitVector(any(mat[:, j]) for j in 1:size(mat, 2)) # in each column, any true [ so output is along the row ]
+    else
+        throw(ArgumentError("`dim` must be 1 (rows) or 2 (cols), got $dim"))
+    end
+
+    # delegate to the vector version
+    contiguous_true_ranges(mask)
+end
 
 """
-2D version
+    2D version
 """
 function conservative_spline_values(
     xf::AbstractVector{FT},
@@ -983,8 +1021,8 @@ function conservative_spline_values(
     k::Int = 1,
     method::Type{<:AbstractInterpolationMethod} = FastLinear1DInterpolationMethod,
     return_spl::Bool = false,
-    f_enhancement_factor::Union{Int, Nothing} = nothing,
-    f_p_enhancement_factor::Union{Int, Nothing} = nothing,
+    f_enhancement_factor::Int = 1,
+    f_p_enhancement_factor::Int = 1,
     rtol::FT = FT(1e-6),
     enforce_positivity::Bool = false,
     nnls_alg::Symbol = :pivot,
@@ -1052,7 +1090,7 @@ function conservative_spline_values(
         # we could still do all the solves in 1 and it seemed to save about 33% but idk how that plays w/ contiguous regions...
 
         for contiguous_region in contiguous_true_ranges(valid_inds; dim = 1) # any valid in time we keep, so check each row [dim = 1 is left behind as one column]
-            A_sub = @view A_cache[xc][contiguous_region, contiguous_region] # get the submatrix of A for the contiguous region
+            A_sub = @view A[contiguous_region, contiguous_region] # get the submatrix of A for the contiguous region
             mc_sub = @view mc[contiguous_region, :] # get the subvector of mc for the contiguous region
 
             yc[contiguous_region, :] .=
@@ -1060,8 +1098,7 @@ function conservative_spline_values(
         end
 
     else
-        # yc = A \ mc # solve for yc
-        yc .= (Af_cache[xc] \ mc) # solve for yc using the factorization of A [we can't do contiguous regions here w/o recomputing the factorization, so we just solve the whole thing at once]
+        yc .= A \ mc # solve for yc using the factorization of A
     end
 
     if any(!isfinite, mc)
