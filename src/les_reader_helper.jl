@@ -33,8 +33,8 @@ function get_data_new_z_t_LES(
     weight = nothing, # for extensive variables and for conservative regridding, you may wish to weight by something like density when interpolating in z...
     weightg = nothing, # for extensive variables and for conservative regridding, you may wish to weight by something like density when interpolating in z...
     return_before_interp::Bool = false,
-    A::Union{Array, Nothing} = nothing,
-    Af::Union{Array, Nothing} = nothing,
+    A::Union{Nothing, AbstractArray} = nothing,
+    Af::Union{Nothing, AbstractArray, LinearAlgebra.Factorization} = nothing, # precomputed factorization of A :: technically, A being Diagonal, or Triangular or something could lead to AbstractMatrix Af so we allow both AbstractMatrix and Factorization
     use_svectors::Bool = false,
 )
 

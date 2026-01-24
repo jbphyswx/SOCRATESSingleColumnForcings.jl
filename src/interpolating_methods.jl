@@ -655,7 +655,7 @@ function conservative_regridder(
     nnls_tol::FT = FT(1e-8),
     enforce_conservation::Bool = true,
     A::Union{AbstractMatrix, Nothing} = nothing,
-    Af::Union{AbstractMatrix, Nothing} = nothing,
+    Af::Union{AbstractMatrix, LinearAlgebra.Factorization, Nothing} = nothing, # precomputed factorization of A :: technically, A being Diagonal, or Triangular or something could lead to AbstractMatrix Af so we allow both AbstractMatrix and Factorization
 ) where {BCT <: ValidBoundaryConditions}
 
     # Build the spline
@@ -926,7 +926,7 @@ function conservative_spline_values(
     nnls_alg::Symbol = :pivot,
     nnls_tol::FT = FT(1e-8),
     A::Union{AbstractMatrix, Nothing} = nothing,
-    Af::Union{AbstractMatrix, Nothing} = nothing,
+    Af::Union{AbstractMatrix, LinearAlgebra.Factorization, Nothing} = nothing, # precomputed factorization of A :: technically, A being Diagonal, or Triangular or something could lead to AbstractMatrix Af so we allow both AbstractMatrix and Factorization
     yc::Union{AbstractVector{FT2}, Nothing} = nothing,
 ) where {FT <: Real, FT2 <: Real, BCT <: ValidBoundaryConditions}
 
@@ -1028,7 +1028,7 @@ function conservative_spline_values(
     nnls_alg::Symbol = :pivot,
     nnls_tol::FT = FT(1e-8), # default for Float64 in package
     A::Union{AbstractMatrix, Nothing} = nothing,
-    Af::Union{AbstractMatrix, Nothing} = nothing,
+    Af::Union{AbstractMatrix, LinearAlgebra.Factorization, Nothing} = nothing, # precomputed factorization of A :: technically, A being Diagonal, or Triangular or something could lead to AbstractMatrix Af so we allow both AbstractMatrix and Factorization
     yc::Union{AbstractMatrix{FT2}, Nothing} = nothing,
     inplace::Bool = false, # if true, we modify mc inplace and return nothing, otherwise we return the modified mc
 ) where {FT <: Real, FT2 <: Real, BCT <: ValidBoundaryConditions}

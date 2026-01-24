@@ -53,26 +53,6 @@ import Thermodynamics.Parameters as TDP
 
 
     # Test 2D version:
-    # function conservative_spline_values(
-    #     xf::AbstractVector{FT},
-    #     mc::AbstractMatrix{FT}, # this is the mass concentration, either a vector or a matrix
-    #     ;
-    #     bc::BCT = ExtrapolateBoundaryCondition(),
-    #     k::Int = 1,
-    #     method::Type{<:AbstractInterpolationMethod} = FastLinear1DInterpolationMethod,
-    #     return_spl::Bool = false,
-    #     f_enhancement_factor::Union{Int, Nothing} = nothing,
-    #     f_p_enhancement_factor::Union{Int, Nothing} = nothing,
-    #     rtol::FT = FT(1e-6),
-    #     enforce_positivity::Bool = false,
-    #     nnls_alg::Symbol = :pivot,
-    #     nnls_tol::FT = FT(1e-8), # default for Float64 in package
-    #     A::Union{AbstractMatrix, Nothing} = nothing,
-    #     Af::Union{AbstractMatrix, Nothing} = nothing,
-    #     yc::Union{AbstractMatrix{FT2}, Nothing} = nothing,
-    #     inplace::Bool = false, # if true, we modify mc inplace and return nothing, otherwise we return the modified mc
-    # ) where {FT <: Real, FT2 <: Real, BCT <: ValidBoundaryConditions}
-
     SSCF.conservative_spline_values(
         new_zs[2],
         rand(FT, length(new_zs), 10);

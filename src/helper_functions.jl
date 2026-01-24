@@ -639,7 +639,7 @@ function interp_along_dim(
     conservative_interp::Bool = false,
     conservative_interp_kwargs::DCIKT = default_conservative_interp_kwargs,
     A::Union{Nothing, AbstractArray} = nothing,
-    Af::Union{Nothing, AbstractArray} = nothing,
+    Af::Union{Nothing, AbstractArray, LinearAlgebra.Factorization} = nothing, # precomputed factorization of A :: technically, A being Diagonal, or Triangular or something could lead to AbstractMatrix Af so we allow both AbstractMatrix and Factorization
     use_svectors::Bool = false,
 )
     # would use kwargs but doesn't play nice w/ ODE solver for some reason... instead we get out the parameters we want explicitly and pass them all the time (splatting gives a union typle type object that apparently can't be handled?)
@@ -909,7 +909,7 @@ function var_to_new_coord(
     conservative_interp_kwargs::DCIKT = default_conservative_interp_kwargs,
     weight = nothing, # for extensive variables and for conservative regridding, you may wish to weight by something like density when interpolating in z...
     A::Union{Nothing, AbstractArray} = nothing, # for extensive variables and for conservative regridding, you may wish to weight by something like density when interpolating in z...
-    Af::Union{Nothing, AbstractArray} = nothing, # for extensive variables and for conservative regridding, you may wish to weight by something like density when interpolating in z...
+    Af::Union{Nothing, AbstractArray, LinearAlgebra.Factorization} = nothing, # precomputed factorization of A :: technically, A being Diagonal, or Triangular or something could lead to AbstractMatrix Af so we allow both AbstractMatrix and Factorization
     use_svectors::Bool = false,
 )
     vardata = isa(var, String) ? data[var] : var
@@ -1006,7 +1006,7 @@ function get_data_new_z_t(
     weightg = nothing, # for extensive variables and for conservative regridding, you may wish to weight by something like density when interpolating in z...
     return_before_interp::Bool = false,
     A::Union{Nothing, AbstractArray} = nothing,
-    Af::Union{Nothing, AbstractArray} = nothing,
+    Af::Union{Nothing, AbstractArray, LinearAlgebra.Factorization} = nothing, # precomputed factorization of A :: technically, A being Diagonal, or Triangular or something could lead to AbstractMatrix Af so we allow both AbstractMatrix and Factorization
     use_svectors::Bool = false,
 )
 

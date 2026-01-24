@@ -338,7 +338,7 @@ function process_case(
     # Af_cache = Dict{Tuple{Symbol, Int}, Array}() # cache for A matrix factorization, Using the factorized matrix allows for a 3000-1000x speedup from just cacheing the A matrix.
 
     A_cache = Dict{AbstractInterpolationMethod, Array}() # cache for A matrices for the new grid. The grid is always the same we just need a version for each spline type. Recalculating the matrix involves integrals can be expensive so we avoid doing so... (we certainly don't want to be doing it at every t!)
-    Af_cache = Dict{AbstractInterpolationMethod, Array}()
+    Af_cache = Dict{AbstractInterpolationMethod, LinearAlgebra.Factorization}() # because we know these are just arrays, we can trust this is a factorization. definitely isn't Diagonal or Triangular or anything that would factorize to an abstract array
 
     if conservative_interp
         # conservative interpolation is a bit more expensive, so we cache the A matrix for the Spline1D method
