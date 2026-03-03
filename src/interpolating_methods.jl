@@ -556,7 +556,7 @@ function pchip_smooth_derivative(
                 range(xp[i], stop = xp[i + 1], length = f_enhancement_factor + 1)[1:(end - 1)]
         end
         xp_new[end] = xp[end]
-        xp, fp = xp_new, interpolate_1d(xp_new, xp, fp; method = Fast1Linear1DInterpolationMethod, bc = bc)
+        xp, fp = xp_new, interpolate_1d(xp_new, xp, fp; method = FastLinear1DInterpolationMethod, bc = bc)
     end
 
     # create a pchip interpolator to xp
