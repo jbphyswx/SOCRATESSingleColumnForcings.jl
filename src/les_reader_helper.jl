@@ -129,16 +129,16 @@ function get_data_new_z_t_LES(
     end
 
     if isnothing(z_old)
-        z_old = data["z"][:] # z is already in LES data
+        z_old = vec(Array(data["z"])) # z is already in LES data
     end
     if isnothing(t_old) # is in unis of days in LES files
-        t_old = data["time"][:] # check this unit was right in the files (may need to make sure it's subtracting out the first timestep so starts at 0) -- do we need to align this on a dimension?
+        t_old = vec(Array(data["time"])) # check this unit was right in the files (may need to make sure it's subtracting out the first timestep so starts at 0) -- do we need to align this on a dimension?
         t_old = (t_old .- t_old[1]) * 24 * 3600 # convert to seconds
     end
 
     initial_ind = 1 # initial ind is just 0 since we're using th LES output
-    if isa(vardata, NC.CFVariable) # breaks things downstream if it is and we aren't calling combine air and ground data like we did for the others..
-        vardata = vardata[:]
+    if hasmethod(NC.dimnames, Tuple{typeof(vardata)}) # breaks things downstream if labeled lazy variable is left unmaterialized
+        vardata = Array(vardata)
     end
 
     ### SHOULD WE INTERPOLATE TO THE EXACT TIME RATHER THAN CLOSEST TIMES? IDK... would need to be done before creating vertical splines... 

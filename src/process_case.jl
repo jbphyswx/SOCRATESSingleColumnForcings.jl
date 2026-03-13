@@ -67,47 +67,50 @@ function process_case(
     ## For surface values, adjust to the time period of interest and return only the surface values, these are called in TC.jl
     if ~isnothing(surface)
         initial_ind = get_initial_ind(data[forcing_type], flight_number) # should the reference be the first timestep? or what is the reference meant to be...
-        summary_file = joinpath(dirname(@__DIR__), "Data", "SOCRATES_summary.nc")
+        summary_file = atlas_socrates_summary_file(flight_number)
         SOCRATES_summary = NC.Dataset(summary_file, "r")
-        flight_ind = findfirst(SOCRATES_summary["flight_number"][:] .== flight_number)
+        flight_ind = findfirst(vec(Array(SOCRATES_summary["flight_number"])) .== flight_number)
         Tg_offset = SOCRATES_summary[:deltaT][flight_ind]  # I think this is backwards in table 2 in the paper... is really T_2m - SST as in Section 3
         if surface ∈ ["reference_state", "reference", "ref"]  # we just want the surface reference state and we'll just return that
-            Tg_orig = data[forcing_type]["Tg"][:][initial_ind] # SST
+            Tg_orig = vec(Array(data[forcing_type]["Tg"]))[initial_ind] # SST
             Tg = Tg_orig + Tg_offset # might have to drop lon,lat dims or sum
-            pg = data[forcing_type]["Ps"][:][initial_ind]
+            pg = vec(Array(data[forcing_type]["Ps"]))[initial_ind]
 
             if Tg_offset < 0  # SST/T_orig > Tg, assume SST sets qg at ground level and serves as a source
                 qg = calc_qg_from_pgTg(pg, Tg, thermo_params)
             else # SST/T_orig < Tg, stable boundary layer, assume latent air RH controls things... not SST
-                p = vec(data[forcing_type]["lev"])[:]
-                q = vec(selectdim(data[forcing_type]["q"], time_dim_num, initial_ind))[:] # select our q value subset along the time dimension
+                p = vec(Array(data[forcing_type]["lev"]))
+                q_data = Array(data[forcing_type]["q"])
+                q = NCDatasets.nomissing(read_profile_at_time(q_data, z_dim_num, time_dim_num, initial_ind)) # select our q value subset along the time dimension
                 q = q ./ (1 .+ q) # mixing ratio to specific humidity
                 qg = calc_qg_extrapolate_pq(pg, p, q)
                 # qg = collect(qg)[]  # Thermodynamics 0.10.2 returns a tuple rather than scalar, so this can collapse to scalar in either 0.10.1<= or 0.10.2>=
             end
-            return TD.PhaseEquil_pTq(thermo_params, pg, Tg, qg)
+            return phase_equil_pTq(thermo_params, pg, Tg, qg)
         elseif surface ∈ ["surface_conditions", "conditions", "cond"]
-            pg = NCDatasets.nomissing(vec(data[forcing_type]["Ps"])[:])[initial_ind:end]
-            Tg_orig = vec(NCDatasets.nomissing(data[forcing_type]["Tg"])[:])[initial_ind:end] # SST
+            pg = NCDatasets.nomissing(vec(Array(data[forcing_type]["Ps"])))[initial_ind:end]
+            Tg_orig = NCDatasets.nomissing(vec(Array(data[forcing_type]["Tg"])))[initial_ind:end] # SST
             Tg = Tg_orig .+ Tg_offset # might have to drop lon,lat dims or sum
             # before we were extrapolating to surface to get qg which looks ok at first but after ts 1, the LES diverges, maybe it's supposed to be going towards Tg SST
             if Tg_offset < 0  # SST > Tg, assume SST sets qg at ground level going forward and serves as a source (so use full Tg not Tg_orig)
                 qg = calc_qg_from_pgTg.(pg, Tg, thermo_params)  # surface specific humidity over liquid
             else # SST < Tg, so stable boundary layer, so still set qg to the exigent air RH value not the SST saturation so that it doesnt serve as a source of moisture (even if SST saturation value is greater) (Not sure why boundary layer parameterization doesn't just handle it but we were getting huge moisture spikes at sfc from SST when RH was low, maybe it's a subsidence thing)
-                p = vec(data[forcing_type]["lev"])[:]
-                q = selectdim(
-                    data[forcing_type]["q"],
-                    time_dim_num,
-                    initial_ind:size(data[forcing_type]["q"], time_dim_num),
-                ) # select our q value subset along the time dimension
-                q = vec.(collect(eachslice(q, dims = time_dim_num))) # turn our q from [lon, lat, lev, time] to a list of vectors along [lon,lat,lev] to match p
+                p = vec(Array(data[forcing_type]["lev"]))
+                q_data = Array(data[forcing_type]["q"])
+                q = NCDatasets.nomissing(read_profiles_over_time(
+                    q_data,
+                    z_dim_num,
+                    time_dim_num;
+                    time_indices = initial_ind:size(q_data, time_dim_num),
+                )) # select our q value subset along the time dimension as a z x time matrix
+                q = collect(eachcol(q)) # turn our q into a list of vertical profiles to match p
                 q = map(mr -> mr ./ (one(FT) .+ mr), q) # mixing ratio to specific humidity for each vector we created in q
                 qg = map((pg, q) -> calc_qg_extrapolate_pq(pg, p, q), pg, q) # map the function to get out qg for each time step
             end
 
             qg_orig = calc_qg_from_pgTg.(pg, Tg_orig, thermo_params)  # surface specific humidity over liquid at original Tg (SST)
 
-            tg = data[forcing_type]["tsec"][initial_ind:end] # get the time array
+            tg = vec(Array(data[forcing_type]["tsec"]))[initial_ind:end] # get the time array
             tg = tg .- tg[1] # i think we need this to get the initial time to be 0, so the interpolation works
             # in this interpolation, tsec has to be adjusted to our offsets no? or we clip e.g. pg to be pg[initial_ind:end], tsec would also need to be adjusted no?, subtract the value at initial_ind i guess...
             return (;
@@ -144,21 +147,21 @@ function process_case(
     q = map(mr -> mr ./ (1 .+ mr), q) # mixing ratio to specific humidity for each forcing_type
 
     #For not surface though, we need to add in the ΔT from the summary table in the Atlas paper (to tsg above?)
-    summary_file = joinpath(dirname(@__DIR__), "Data", "SOCRATES_summary.nc")
+    summary_file = atlas_socrates_summary_file(flight_number)
     SOCRATES_summary = NC.Dataset(summary_file, "r")
-    flight_ind = findfirst(SOCRATES_summary["flight_number"][:] .== flight_number)
+    flight_ind = findfirst(vec(Array(SOCRATES_summary["flight_number"])) .== flight_number)
     Tg_orig = map(x -> x, Tg) # copy (can we just use copy()?)
     Tg_offset = SOCRATES_summary[:deltaT][flight_ind]  # I think this is backwards in table 2 in the paper... is really T_2m - SST as in Section 3
     Tg = map(Tg -> Tg .+ Tg_offset, Tg)
 
     if Tg_offset < 0  # SST > Tg, assume Tg limits moisture below last known point and just extrapolate
-        base_calc_qg = (pg, p, q) -> calc_qg_extrapolate_pq(pg, p, q[:])
+        base_calc_qg = (pg, p, q) -> calc_qg_extrapolate_pq(pg, p, q)
         qg = map(
             (pg, p, q) ->
                 base_calc_qg.(
                     pg,
-                    Ref(p[:]),
-                    align_along_dimension(vec.(collect(eachslice(q; dims = time_dim_num))), z_dim_num),
+                    Ref(vec(Array(p))),
+                    align_along_dimension(vec.(collect(eachslice(Array(q); dims = time_dim_num))), z_dim_num),
                 ),
             pg,
             p,
@@ -176,12 +179,14 @@ function process_case(
     end
 
     # Set up thermodynamic states for easier use (for both forcing_type and ERA -- note ERA subsidence for example depends on density which relies on T,p,q so need both even if forcing_type is :obs_data)
-    tsg = map((pg, Tg, qg) -> TD.PhaseEquil_pTq.(thermo_params, pg, Tg, qg), pg, Tg, qg)
+    tsg = map((pg, Tg, qg) -> phase_equil_pTq.(thermo_params, pg, Tg, qg), pg, Tg, qg)
+    tsg = map(Array, tsg)
 
     # In principle at initiation they assume domination by liquid, so T_l,i ≈ T_l. We are given in the forcing_type files T_L = T - L q_c/ c_p. Then, θ_L,I ≈ θ_L = θ - θ\T L q_c/ c_p = (θ/T) ( T - L q_c/ c_p) = (θ/T) T_L thus θ_L = T_L (p_0/p)^k, the same as just calculating the dry potential temperature subsitututing T_L
-    θ = map((T, p) -> TD.dry_pottemp_given_pressure.(thermo_params, T, p), T, p) # should be same as # θ = map((T, p, q) -> TD.dry_pottemp_given_pressure.(thermo_params, T, p, TD.PhasePartition.(q)), T, p, q)
+    θ = map((T, p) -> TD.potential_temperature_given_pressure.(thermo_params, T, p), T, p) # dry equivalent for forcing input conversion
 
-    ts = map((p, θ, q) -> TD.PhaseEquil_pθq.(thermo_params, p, θ, q), p, θ, q)
+    ts = map((p, θ, q) -> phase_equil_pθq.(thermo_params, p, θ, q), p, θ, q)
+    ts = map(Array, ts)
 
     # get indices where the ground would get inserted in... (and convert to same shape/dims.)
     ground_indices =
@@ -231,8 +236,8 @@ function process_case(
 
 
     # ω (subsidence) # always forced by era5
-    ρ = TD.air_density.(thermo_params, ts[forcing_type])
-    ρg = TD.air_density.(thermo_params, tsg[forcing_type])
+    ρ = air_density_compat.(thermo_params, ts[forcing_type])
+    ρg = air_density_compat.(thermo_params, tsg[forcing_type])
     ρ = combine_air_and_ground_data(ρ, ρg, z_dim_num; insert_location = ground_indices[forcing_type])
     ω = data[forcing_type]["omega"]
     dpdt_g = data[forcing_type]["Ptend"]
@@ -242,7 +247,7 @@ function process_case(
     p_grid = map((p,) -> add_dim(align_along_dimension(p, z_dim_num), time_dim_num), p) # align on dimension 3 lev, add time dimensino 4
     p_full = map(
         (p_grid, pg, ground_indices) ->
-            combine_air_and_ground_data(p_grid, pg[:], z_dim_num; insert_location = ground_indices),
+            combine_air_and_ground_data(p_grid, pg, z_dim_num; insert_location = ground_indices),
         p_grid,
         pg,
         ground_indices,
@@ -259,12 +264,45 @@ function process_case(
     L = 2.2 # maximum value (shape parameter)
     a = -L / 2
     p0 = 250.0 * 100
-    p1 = add_dim(pg[forcing_type][:], z_dim_num)
+    p1 = maximum(p_full[forcing_type], dims = z_dim_num)
     (p1, y1) = (p1, 1) # use our ground pressure (can't use pfull cause would need to pull)
     (p2, y2) = (p0, 0)
     k = @. log((L / 2 + 1) / (L / 2 - 1)) / (p1 - p0) # ps is an array so we have an array of ks
     f_p = @. cos(π / 2 * (p1 - p_full[forcing_type]) / (p1 - p0)) * (p_full[forcing_type] >= p0) # atlas email
     f_p_alt = @. (a + L / (1 + exp(-k * (p_full[forcing_type] - p0)))) * (p_full[forcing_type] >= p0) # my original
+
+    if size(f_p, z_dim_num) != size(ω, z_dim_num)
+        # If pressure-derived profile and omega use different vertical resolutions,
+        # map f_p onto omega's vertical count using nearest-index resampling.
+        iz = round.(Int, range(1, size(f_p, z_dim_num), length = size(ω, z_dim_num)))
+        f_p = selectdim(f_p, z_dim_num, iz)
+    end
+
+    if size(f_p) != size(ω)
+        all_permutations(v::Vector{Int}) = isempty(v) ? [Int[]] : begin
+            out = Vector{Vector{Int}}()
+            for i in eachindex(v)
+                head = v[i]
+                tail = v[[j for j in eachindex(v) if j != i]]
+                for p in all_permutations(tail)
+                    push!(out, [head; p])
+                end
+            end
+            out
+        end
+
+        matched = false
+        for perm in all_permutations(collect(1:ndims(f_p)))
+            f_p_perm = permutedims(f_p, perm)
+            if size(f_p_perm) == size(ω)
+                f_p = f_p_perm
+                matched = true
+                break
+            end
+        end
+        matched ||
+            error("could not align f_p dimensions with omega dimensions: size(f_p)=$(size(f_p)), size(omega)=$(size(ω))")
+    end
 
 
 
@@ -308,7 +346,15 @@ function process_case(
     ug_nudge, vg_nudge = ug, vg
 
     # H (nudge)
-    θ_liq_ice = TD.liquid_ice_pottemp.(thermo_params, ts_full[forcing_type])
+    ts_full_forcing = ts_full[forcing_type]
+    θ_liq_ice = TD.liquid_ice_pottemp.(
+        thermo_params,
+        getproperty.(ts_full_forcing, :T),
+        getproperty.(ts_full_forcing, :p),
+        getproperty.(ts_full_forcing, :q_tot),
+        getproperty.(ts_full_forcing, :q_liq),
+        getproperty.(ts_full_forcing, :q_ice),
+    )
     H_nudge = θ_liq_ice
 
 

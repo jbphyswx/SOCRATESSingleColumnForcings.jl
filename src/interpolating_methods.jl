@@ -1,8 +1,8 @@
 using ForwardDiff: ForwardDiff
 using PCHIPInterpolation: PCHIPInterpolation
-using Dierckx: Dierckx, Spline1D
+using Dierckx: Dierckx
 # using Integrals: Integrals
-using NonNegLeastSquares: NonNegLeastSquares, nonneg_lsq
+using NonNegLeastSquares: NonNegLeastSquares
 
 
 
@@ -460,6 +460,18 @@ function interpolate_1d(
     method::FastLinear1DInterpolationMethod;
     bc::BCT = ErrorBoundaryCondition(),
 ) where {BCT <: ValidBoundaryConditions}
+    if (xp isa AbstractVector) && (fp isa AbstractVector)
+        xpT = Base.nonmissingtype(eltype(xp))
+        fpT = Base.nonmissingtype(eltype(fp))
+        if (xpT != eltype(xp)) || (fpT != eltype(fp))
+            valid = .!ismissing.(xp) .& .!ismissing.(fp)
+            xp = xp[valid]
+            fp = fp[valid]
+            T = promote_type(xpT, fpT)
+            xp = T.(xp)
+            fp = T.(fp)
+        end
+    end
     spl = build_spline(method, xp, fp; bc = bc)
     return spl.(x)
 end
@@ -477,6 +489,19 @@ function interpolate_1d(
     f_p_enhancement_factor::Int = 1,
     allow_Dierckx_k1_fastpath::Bool = true,
 ) where {BCT <: ValidBoundaryConditions}
+    if (xp isa AbstractVector) && (fp isa AbstractVector)
+        xpT = Base.nonmissingtype(eltype(xp))
+        fpT = Base.nonmissingtype(eltype(fp))
+        if (xpT != eltype(xp)) || (fpT != eltype(fp))
+            valid = .!ismissing.(xp) .& .!ismissing.(fp)
+            xp = xp[valid]
+            fp = fp[valid]
+            T = promote_type(xpT, fpT)
+            xp = T.(xp)
+            fp = T.(fp)
+        end
+    end
+
     if method <: PCHIPInterpolationMethod
         return interpolate_1d(x, xp, fp, method(); bc = bc)
     elseif method <: PCHIPSmoothDerivativeInterpolationMethod
@@ -727,7 +752,7 @@ function conservative_regridder(
         # mc_avg = [first(Integrals.QuadGK.quadgk(spline_orig, xf[i], xf[i+1])) / Δx[i] for i in eachindex(Δx)]
 
         if enforce_positivity
-            y_mean = mean(y)
+            y_mean = Statistics.mean(y)
             if (0 < y_mean < 1) # i think too large is fine, ignore small numbers, but bypass if mean is 0.
                 # I think things start to break down around 2* eps(FT)^0.5, but we'll bring everything small up to 1 to be sure...
                 y /= y_mean # we just scale up to 1, that should be fine, if the data has a huge range maybe something breaks but that's not a good fit for regridding like this anyway... [ maybe *= inv(y_mean) is faster?]
@@ -957,8 +982,8 @@ function conservative_spline_values(
     end
 
     if enforce_positivity
-        if 0 < mean(mc) < (2 * eps(FT)^0.5)
-            @warn "mean(mc) = $(mean(mc)) < [2 * eps($FT)^0.5 = $(2 * eps(FT)^0.5)]; this is very small, NNLS may arbitrarily converge to 0. Consider scaling your data to be larger."
+        if 0 < Statistics.mean(mc) < (2 * eps(FT)^0.5)
+            @warn "mean(mc) = $(Statistics.mean(mc)) < [2 * eps($FT)^0.5 = $(2 * eps(FT)^0.5)]; this is very small, NNLS may arbitrarily converge to 0. Consider scaling your data to be larger."
         end
         yc .= max.(NonNegLeastSquares.nonneg_lsq(A, mc; alg = nnls_alg, tol = nnls_tol)[:], FT(0)) # Non-negative least square solver (bound the output by 0, since some algs like :pivot can leave underflow negatives like 1e-17 in NonNegativeLeastSquares.jl)
     else
@@ -1078,8 +1103,8 @@ function conservative_spline_values(
     if enforce_positivity # if we want to enforce positivity, we need to use a non-negative least squares solver
         # if 0 < mean(mc) < (2 * eps(FT)^0.5)
         # @info "mc = $(mc); mean(mc) = $(mean(mc)); eps(FT) = $(eps(FT)); 2 * eps(FT)^0.5 = $(2 * eps(FT)^0.5)"
-        if any(x -> (0 < x < 2 * eps(FT)^0.5), mean(mc, dims = 1)) # check if the mean of mc is small, if so, we should warn the user
-            @warn "mean(mc) = $(mean(mc)) < [2 * eps($FT)^0.5 = $(2 * eps(FT)^0.5)]; this is very small, NNLS may arbitarily converge to 0. Consider scaling your data to be larger."
+        if any(x -> (0 < x < 2 * eps(FT)^0.5), Statistics.mean(mc, dims = 1)) # check if the mean of mc is small, if so, we should warn the user
+            @warn "mean(mc) = $(Statistics.mean(mc)) < [2 * eps($FT)^0.5 = $(2 * eps(FT)^0.5)]; this is very small, NNLS may arbitarily converge to 0. Consider scaling your data to be larger."
         end
 
         # whereever M is 0, we dont need to solve there

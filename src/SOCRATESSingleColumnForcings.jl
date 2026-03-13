@@ -3,14 +3,16 @@ module SOCRATESSingleColumnForcings
 import Thermodynamics as TD
 const TDP = TD.Parameters
 import NCDatasets as NC
-using NCDatasets: NCDatasets, nomissing
-using DelimitedFiles: DelimitedFiles, readdlm
-using Statistics: Statistics, mean
-using Dierckx: Dierckx, Spline1D
-using LinearAlgebra: LinearAlgebra, factorize
+using NCDatasets: NCDatasets
+using Artifacts: Artifacts
+using Pkg: Pkg
+using DelimitedFiles: DelimitedFiles
+using Statistics: Statistics
+using Dierckx: Dierckx
+using LinearAlgebra: LinearAlgebra
 using Dates: Dates
-using Downloads: download
-using StaticArrays: StaticArrays, SVector
+using Downloads: Downloads
+using StaticArrays: StaticArrays
 
 
 resolve_nan(x::FT, val::FT = FT(0.0)) where {FT} = isnan(x) ? FT(val) : x # replace nan w/ 0
@@ -27,7 +29,35 @@ const FT = Float64
 const flight_numbers = (1, 9, 10, 11, 12, 13)
 const forcing_types = (:obs_data, :ERA5_data) # maybe change these to [:obs,:ERA5] later? would need to mirror in Cases.jl in TC.jl
 const TDPS = TD.Parameters.ThermodynamicsParameters
-const TDTS = TD.ThermodynamicState
+const package_root = dirname(@__DIR__)
+const artifacts_toml = joinpath(package_root, "Artifacts.toml")
+
+function phase_equil_pTq(param_set::TDPS, p, T, q_tot)
+    FT = promote_type(typeof(p), typeof(T), typeof(q_tot), eltype(param_set))
+    _p = FT(p)
+    _T = FT(T)
+    _q_tot = FT(q_tot)
+    ρ = TD.air_density(param_set, _T, _p, _q_tot)
+    (q_liq, q_ice) = TD.condensate_partition(param_set, _T, ρ, _q_tot)
+    return (; p = _p, T = _T, q_tot = _q_tot, q_liq = FT(q_liq), q_ice = FT(q_ice))
+end
+
+function phase_equil_pθq(param_set::TDPS, p, θ_li, q_tot)
+    FT = promote_type(typeof(p), typeof(θ_li), typeof(q_tot), eltype(param_set))
+    _p = FT(p)
+    _θ_li = FT(θ_li)
+    _q_tot = FT(q_tot)
+    sat = TD.saturation_adjustment(TD.RS.NewtonsMethod, param_set, TD.pθ_li(), _p, _θ_li, _q_tot, 50, FT(1e-6))
+    return (; p = _p, T = FT(sat.T), q_tot = _q_tot, q_liq = FT(sat.q_liq), q_ice = FT(sat.q_ice))
+end
+
+air_pressure_compat(::TDPS, ts) = ts.p
+
+air_density_compat(param_set::TDPS, ts) =
+    TD.air_density(param_set, ts.T, ts.p, ts.q_tot, ts.q_liq, ts.q_ice)
+
+virtual_temperature_compat(param_set::TDPS, ts) =
+    TD.virtual_temperature(param_set, ts.T, ts.q_tot, ts.q_liq, ts.q_ice)
 
 # Two cases with shallow cloud-topped boundary layers, RF12 and RF13, are run on a 192-level vertical grid.
 # The other four cases have clouds extending through deeper boundary layers; they are run on a 320-level vertical grid.

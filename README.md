@@ -14,10 +14,13 @@ The profiles are created off the data used to force LES simulations by Atlas, 20
 The output data are too large to store here and so will be stored in box. They 1D functions are interpolated to the grid that Atlas used, but functions are provided to interpolate to your own grid/time and return either raw data in time or a column of spline functions...
 
 
-You can retrieve data using `/Data/Atlas_LES_Profiles/download_atlas_les_inputs.jl`
-You can load retrieved data using  `/Data/Atlas_LES_Profiles/load_atlas_les_inputs.jl`
+Data retrieval is now artifact-backed in `v0.14`.
 
-The original profiles are also stored in `/Data/Atlas_LES_Profiles/`
+- Call `SSCF.download_atlas_les_inputs(...)` and/or `SSCF.download_atlas_les_outputs(...)` to create/update per-flight artifacts in your Julia artifact store.
+- Call `SSCF.open_atlas_les_input(...)` and `SSCF.open_atlas_les_output(...)` to read forcing/profile files from those artifacts.
+- `SOCRATES_summary.nc` is also resolved from the artifact path used by SSCF.
+
+The raw download/link definitions remain in `/Data/Atlas_LES_Profiles/`.
 
 There are a variety of helper functions in `src/helper_functions.jl`
 

@@ -7,6 +7,241 @@ import SOCRATESSingleColumnForcings as SSCF
 
 
 thisdir = @__DIR__ # doesn't seem to work to use @__DIR__ directly as a variable
+const package_data_dir = dirname(thisdir)
+
+function _copytree_contents!(src::AbstractString, dst::AbstractString)
+    for name in readdir(src)
+        src_path = joinpath(src, name)
+        dst_path = joinpath(dst, name)
+        if isdir(src_path)
+            mkpath(dst_path)
+            _copytree_contents!(src_path, dst_path)
+        else
+            cp(src_path, dst_path; force = true)
+        end
+    end
+    return dst
+end
+
+function _download_first(urls, savepath::AbstractString)
+    found = false
+    for url in urls
+        if isnothing(url)
+            continue
+        end
+        try
+            Downloads.download(url, savepath)
+            found = true
+            @info "Found $(url) for $savepath"
+            break
+        catch
+            @warn "Did not find $(url)"
+        end
+    end
+    return found
+end
+
+_rf_num(flight::Int) = "RF" * string(flight, pad = 2)
+_inputs_artifact_name(flight::Int) = "atlas_les_inputs_" * lowercase(_rf_num(flight)) * "_v1"
+_outputs_artifact_name(flight::Int) = "atlas_les_outputs_" * lowercase(_rf_num(flight)) * "_v1"
+
+function _artifact_dir(name::String)
+    hash = Artifacts.artifact_hash(name, SSCF.artifacts_toml)
+    return isnothing(hash) ? nothing : Artifacts.artifact_path(hash)
+end
+
+function _required_input_files(flight::Int, forcing_types)
+    RF_num = _rf_num(flight)
+    req = [RF_num * "_grd.txt"]
+    for forcing_type in forcing_types
+        if forcing_type == :obs_data
+            push!(req, RF_num * "_obs-based_SAM_input.nc")
+        elseif forcing_type == :ERA5_data
+            push!(req, RF_num * "_ERA5-based_SAM_input_mar18_2022.nc")
+        else
+            error("forcing_type must be :obs_data or :ERA5_data")
+        end
+    end
+    return req
+end
+
+function _required_output_files(flight::Int, forcing_types)
+    RF_num = _rf_num(flight)
+    req = [RF_num * "_grd.txt"]
+    for forcing_type in forcing_types
+        if forcing_type == :obs_data
+            push!(req, RF_num * "_Obs_SOCRATES_128x128_100m_10s_rad10_vg_M2005_aj.nc")
+        elseif forcing_type == :ERA5_data
+            push!(req, RF_num * "_ERA5_SOCRATES_128x128_100m_10s_rad10_vg_M2005_aj.nc")
+        else
+            error("forcing_type must be :obs_data or :ERA5_data")
+        end
+    end
+    return req
+end
+
+function atlas_les_inputs_root(
+    flight::Int;
+    forcing_types::Union{AbstractArray{Symbol}, Tuple{Vararg{Symbol}}} = (:obs_data,),
+    SOCRATES_LES_inputs_Box_links::Dict{String, String} = SOCRATES_LES_inputs_Box_links,
+)
+    name = _inputs_artifact_name(flight)
+    existing = _artifact_dir(name)
+    input_data_dir = isnothing(existing) ? nothing : joinpath(existing, "Input_Data")
+    required = _required_input_files(flight, forcing_types)
+    summary_artifact_file = isnothing(existing) ? nothing : joinpath(existing, "SOCRATES_summary.nc")
+    has_required = !isnothing(existing) &&
+                   all(isfile(joinpath(input_data_dir, file)) for file in required) &&
+                   isfile(summary_artifact_file)
+    if has_required
+        return existing
+    end
+
+    RF_num = _rf_num(flight)
+    new_hash = Pkg.Artifacts.create_artifact() do artifact_dir
+        if !isnothing(existing)
+            _copytree_contents!(existing, artifact_dir)
+        end
+
+        out_dir = joinpath(artifact_dir, "Input_Data")
+        mkpath(out_dir)
+
+        for forcing_type in forcing_types
+            if forcing_type == :obs_data
+                obs_filename = RF_num * "_obs-based_SAM_input.nc"
+                obs_savepath = joinpath(out_dir, obs_filename)
+                if !isfile(obs_savepath)
+                    urls = (
+                        get(SOCRATES_LES_inputs_Box_links, obs_filename, nothing),
+                        uw_atlas_base_url * obs_filename,
+                    )
+                    found = _download_first(urls, obs_savepath)
+                    !found && @error "Did not find obs forcing for $RF_num in $(urls)"
+                end
+            elseif forcing_type == :ERA5_data
+                ERA5_filename = RF_num * "_ERA5-based_SAM_input_mar18_2022.nc"
+                ERA5_savepath = joinpath(out_dir, ERA5_filename)
+                if !isfile(ERA5_savepath)
+                    urls = (
+                        get(SOCRATES_LES_inputs_Box_links, ERA5_filename, nothing),
+                        uw_atlas_base_url * ERA5_filename,
+                    )
+                    found = _download_first(urls, ERA5_savepath)
+                    !found && @error "Did not find ERA5 forcing for $RF_num in $(urls)"
+                end
+            else
+                error("forcing_type must be :obs_data or :ERA5_data")
+            end
+        end
+
+        grid_filename = RF_num * "_grd.txt"
+        grid_savepath = joinpath(out_dir, grid_filename)
+        if !isfile(grid_savepath)
+            grid_height = SSCF.grid_heights[flight]
+            urls = (
+                get(SOCRATES_LES_inputs_Box_links, string(grid_height) * "level-grd.txt", nothing),
+                uw_atlas_base_url * string(grid_height) * "level-grd.txt",
+            )
+            found = _download_first(urls, grid_savepath)
+            !found && @error "Did not find grid file for $RF_num in $(urls)"
+        end
+
+        summary_src = joinpath(package_data_dir, "SOCRATES_summary.nc")
+        summary_dst = joinpath(artifact_dir, "SOCRATES_summary.nc")
+        if isfile(summary_src) && !isfile(summary_dst)
+            cp(summary_src, summary_dst; force = true)
+        end
+    end
+
+    Pkg.Artifacts.bind_artifact!(SSCF.artifacts_toml, name, new_hash; force = true)
+    return Artifacts.artifact_path(new_hash)
+end
+
+function atlas_les_outputs_root(
+    flight::Int;
+    forcing_types::Union{AbstractArray{Symbol}, Tuple{Vararg{Symbol}}} = (:obs_data, :ERA5_data),
+    SOCRATES_LES_outputs_Box_links::Dict{String, String} = SOCRATES_LES_outputs_Box_links,
+    SOCRATES_LES_inputs_Box_links::Dict{String, String} = SOCRATES_LES_inputs_Box_links,
+)
+    name = _outputs_artifact_name(flight)
+    existing = _artifact_dir(name)
+    output_data_dir = isnothing(existing) ? nothing : joinpath(existing, "Output_Data")
+    required = _required_output_files(flight, forcing_types)
+    has_required = !isnothing(existing) && all(isfile(joinpath(output_data_dir, file)) for file in required)
+    if has_required
+        return existing
+    end
+
+    RF_num = _rf_num(flight)
+    new_hash = Pkg.Artifacts.create_artifact() do artifact_dir
+        if !isnothing(existing)
+            _copytree_contents!(existing, artifact_dir)
+        end
+
+        out_dir = joinpath(artifact_dir, "Output_Data")
+        mkpath(out_dir)
+
+        for forcing_type in forcing_types
+            if forcing_type == :obs_data
+                obs_filename = RF_num * "_output/obs/SOCRATES_128x128_100m_10s_rad10_vg_M2005_aj.nc"
+                obs_savepath = joinpath(out_dir, RF_num * "_Obs_SOCRATES_128x128_100m_10s_rad10_vg_M2005_aj.nc")
+                if !isfile(obs_savepath)
+                    urls = (
+                        get(
+                            SOCRATES_LES_outputs_Box_links,
+                            RF_num * "_obs_SOCRATES_128x128_100m_10s_rad10_vg_M2005_aj.nc",
+                            nothing,
+                        ),
+                        uw_atlas_base_url * obs_filename,
+                    )
+                    found = _download_first(urls, obs_savepath)
+                    !found && @error "Did not find obs forcing for $RF_num in $(urls)"
+                end
+            elseif forcing_type == :ERA5_data
+                ERA5_filename = RF_num * "_output/era5/SOCRATES_128x128_100m_10s_rad10_vg_M2005_aj.nc"
+                ERA5_savepath = joinpath(out_dir, RF_num * "_ERA5_SOCRATES_128x128_100m_10s_rad10_vg_M2005_aj.nc")
+                if !isfile(ERA5_savepath)
+                    urls = (
+                        get(
+                            SOCRATES_LES_outputs_Box_links,
+                            RF_num * "_ERA5_SOCRATES_128x128_100m_10s_rad10_vg_M2005_aj.nc",
+                            nothing,
+                        ),
+                        uw_atlas_base_url * ERA5_filename,
+                    )
+                    found = _download_first(urls, ERA5_savepath)
+                    !found && @error "Did not find ERA5 forcing for $RF_num in either $(urls)"
+                end
+            else
+                error("forcing_type must be :obs_data or :ERA5_data")
+            end
+        end
+
+        grid_filename = RF_num * "_grd.txt"
+        grid_savepath = joinpath(out_dir, grid_filename)
+        if !isfile(grid_savepath)
+            grid_height = SSCF.grid_heights[flight]
+            urls = (
+                get(SOCRATES_LES_inputs_Box_links, string(grid_height) * "level-grd.txt", nothing),
+                uw_atlas_base_url * string(grid_height) * "level-grd.txt",
+            )
+            found = _download_first(urls, grid_savepath)
+            !found && @error "Did not find output-grid file for $RF_num in $(urls)"
+        end
+    end
+
+    Pkg.Artifacts.bind_artifact!(SSCF.artifacts_toml, name, new_hash; force = true)
+    return Artifacts.artifact_path(new_hash)
+end
+
+function atlas_socrates_summary_file(flight_number::Int)
+    artifact_dir = atlas_les_inputs_root(flight_number; forcing_types = (:obs_data,))
+    summary_file = joinpath(artifact_dir, "SOCRATES_summary.nc")
+    if isfile(summary_file)
+        return summary_file
+    end
+    return joinpath(package_data_dir, "SOCRATES_summary.nc")
+end
 
 # download forcings for each flight
 
@@ -129,100 +364,14 @@ function download_atlas_les_inputs(;
     forcing_types::Union{AbstractArray{Symbol}, Tuple{Vararg{Symbol}}} = (:obs_data,),
     SOCRATES_LES_inputs_Box_links::Dict{String, String} = SOCRATES_LES_inputs_Box_links,
 )
-
-    # create joinpath(thisdir, "Input_Data") if doesn't exist
-    if !isdir(joinpath(thisdir, "Input_Data"))
-        mkdir(joinpath(thisdir, "Input_Data"))
+    for flight in flight_numbers
+        atlas_les_inputs_root(
+            flight;
+            forcing_types = forcing_types,
+            SOCRATES_LES_inputs_Box_links = SOCRATES_LES_inputs_Box_links,
+        )
     end
-
-
-    for flight in flight_numbers # the socrates flight numbers
-        RF_num = "RF" * string(flight, pad = 2)
-        obs_filename = RF_num * "_obs-based_SAM_input.nc" # e.g. https://atmos.uw.edu/~ratlas/RF12_obs-based_SAM_input.nc
-        ERA5_filename = RF_num * "_ERA5-based_SAM_input_mar18_2022.nc" # e.g. https://atmos.uw.edu/~ratlas/RF12_ERA5-based_SAM_input_mar18_2022.nc
-
-        for forcing_type in forcing_types
-
-            # download obs forcing
-            if forcing_type == :obs_data
-                obs_savepath = joinpath(thisdir, "Input_Data", obs_filename)
-                if !isfile(obs_savepath)
-                    found = false
-                    urls = (
-                        get(SOCRATES_LES_inputs_Box_links, RF_num * "_obs-based_SAM_input.nc", nothing),
-                        uw_atlas_base_url * obs_filename,
-                    ) # try box first since it's more reliable
-                    for url in urls
-                        if isnothing(url)
-                            continue
-                        end
-                        try
-                            download(url, obs_savepath)
-                            found = true
-                            @info "Found $(url) for $obs_savepath"
-                            break
-                        catch e
-                            @warn "Did not find $(url)"
-                        end
-                    end
-                    !found && @error "Did not find obs forcing for $RF_num in $(urls)"
-                end
-            end
-
-            # download ERA5 forcing
-            if forcing_type == :ERA5_data
-                ERA5_savepath = joinpath(thisdir, "Input_Data", ERA5_filename)
-                if !isfile(ERA5_savepath)
-                    found = false
-                    urls = (
-                        get(SOCRATES_LES_inputs_Box_links, RF_num * "_ERA5-based_SAM_input_mar18_2022.nc", nothing),
-                        uw_atlas_base_url * ERA5_filename,
-                    )
-                    for url in urls
-                        if isnothing(url)
-                            continue
-                        end
-                        try
-                            download(url, ERA5_savepath)
-                            found = true
-                            @info "Found $(url) for $ERA5_savepath"
-                            break
-                        catch e
-                            @warn "Did not find $(url)"
-                            # @warn e
-                        end
-                    end
-                    !found && @error "Did not find ERA5 forcing for $RF_num in $(urls)"
-                end
-            end
-        end
-
-        #download grid file (is same for both era and obs forcings)
-        grid_savepath = joinpath(thisdir, "Input_Data", RF_num * "_grd.txt")
-        if !isfile(grid_savepath)
-            grid_height = SSCF.grid_heights[flight]
-            found = false
-            urls = (
-                get(SOCRATES_LES_inputs_Box_links, string(grid_height) * "level-grd.txt", nothing),
-                uw_atlas_base_url * string(grid_height) * "level-grd.txt",
-            )
-            for url in urls
-                if isnothing(url)
-                    continue
-                end
-                try
-                    download(url, grid_savepath)
-                    found = true
-                    @info "Found $(url) for $grid_savepath"
-                    break
-                catch e
-                    @warn "Did not find $(url)"
-                end
-            end
-            !found && @error "Did not find grid file for $RF_num in $(urls)"
-        end
-        #
-    end
+    return nothing
 end
 
 
@@ -242,82 +391,13 @@ function download_atlas_les_outputs(;
     forcing_types::Union{AbstractArray{Symbol}, Tuple{Vararg{Symbol}}} = (:obs_data, :ERA5_data),
     SOCRATES_LES_outputs_Box_links::Dict{String, String} = SOCRATES_LES_outputs_Box_links,
 )
-
-    # create joinpath(thisdir, "Output_Data") if doesn't exist
-    if !isdir(joinpath(thisdir, "Output_Data"))
-        mkdir(joinpath(thisdir, "Output_Data"))
+    for flight in flight_numbers
+        atlas_les_outputs_root(
+            flight;
+            forcing_types = forcing_types,
+            SOCRATES_LES_outputs_Box_links = SOCRATES_LES_outputs_Box_links,
+            SOCRATES_LES_inputs_Box_links = SOCRATES_LES_inputs_Box_links,
+        )
     end
-
-    for flight in flight_numbers # the socrates flight numbers
-        RF_num = "RF" * string(flight, pad = 2)
-
-        obs_filename = RF_num * "_output/obs/SOCRATES_128x128_100m_10s_rad10_vg_M2005_aj.nc"  # e.g. https://atmos.uw.edu/~ratlas/RF13_output/obs/SOCRATES_128x128_100m_10s_rad10_vg_M2005_aj.nc
-        ERA5_filename = RF_num * "_output/era5/SOCRATES_128x128_100m_10s_rad10_vg_M2005_aj.nc" # e.g. https://atmos.uw.edu/~ratlas/RF12_output/era5/SOCRATES_128x128_100m_10s_rad10_vg_M2005_aj.nc
-
-        # download obs model output
-
-        for forcing_type in forcing_types
-
-            if forcing_type == :obs_data
-
-                obs_savepath = joinpath(thisdir, "Output_Data", RF_num * "_Obs_" * split(obs_filename, "/")[end]) # just the filename, not any paths
-                if !isfile(obs_savepath)
-                    found = false
-                    urls = (
-                        get(
-                            SOCRATES_LES_outputs_Box_links,
-                            RF_num * "_obs_SOCRATES_128x128_100m_10s_rad10_vg_M2005_aj.nc",
-                            nothing,
-                        ),
-                        uw_atlas_base_url * obs_filename,
-                    )
-                    for url in urls
-                        if isnothing(url)
-                            continue
-                        end
-                        try
-                            download(url, obs_savepath)
-                            @info "Found $(url) for $obs_savepath"
-                            found = true
-                            break
-                        catch e
-                            @warn "Did not find $(url)"
-                        end
-                    end
-                    !found && @error "Did not find obs forcing for $RF_num in $(urls)"
-                end
-
-            elseif forcing_type == :ERA5_data
-
-                ERA5_savepath = joinpath(thisdir, "Output_Data", RF_num * "_ERA5_" * split(ERA5_filename, "/")[end]) # just the filename, not any paths
-                if !isfile(ERA5_savepath)
-                    found = false
-                    urls = (
-                        get(
-                            SOCRATES_LES_outputs_Box_links,
-                            RF_num * "_ERA5_SOCRATES_128x128_100m_10s_rad10_vg_M2005_aj.nc",
-                            nothing,
-                        ),
-                        uw_atlas_base_url * ERA5_filename,
-                    )
-                    for url in urls
-                        if isnothing(url)
-                            continue
-                        end
-                        try
-                            download(url, ERA5_savepath)
-                            @info "Found $(url) for $ERA5_savepath"
-                            found = true
-                            break
-                        catch e
-                            @warn "Did not find $(url)"
-                        end
-                    end
-                    !found && @error "Did not find ERA5 forcing for $RF_num in either $(urls)"
-                end
-            end
-
-        end
-
-    end
+    return nothing
 end

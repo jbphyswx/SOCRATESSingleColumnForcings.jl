@@ -64,6 +64,87 @@ function add_dim(vardata, dimnum)
     return reshape(vardata, sz_vardata...) # reshape
 end
 
+function _assert_shape_contract(vardata, keep_dims::Tuple, name::AbstractString)
+    unexpected_dims = [
+        dim for dim in 1:ndims(vardata) if size(vardata, dim) > 1 && !(dim in keep_dims)
+    ]
+    isempty(unexpected_dims) || error(
+        "$name expected only dims $(collect(keep_dims)) to be non-singleton, got size $(size(vardata)) with extra non-singleton dims $(unexpected_dims)",
+    )
+    return nothing
+end
+
+"""
+    read_profile_at_time(vardata, z_dim_num, time_dim_num, time_index)
+
+Read one time slice as a vertical profile. Dimensions other than `z_dim_num`
+must be singleton after selecting `time_index`.
+"""
+function read_profile_at_time(vardata, z_dim_num::Int, time_dim_num::Int, time_index::Int)
+    vardata = Array(vardata)
+    profile = selectdim(vardata, time_dim_num, time_index)
+    z_dim_num = z_dim_num - (time_dim_num < z_dim_num)
+    _assert_shape_contract(profile, (z_dim_num,), "read_profile_at_time")
+    return vec(profile)
+end
+
+"""
+    read_profiles_over_time(vardata, z_dim_num, time_dim_num; time_indices = :)
+
+Read a variable as a `(z, time)` matrix while asserting that every other
+dimension is singleton.
+"""
+function read_profiles_over_time(
+    vardata,
+    z_dim_num::Int,
+    time_dim_num::Int;
+    time_indices = Colon(),
+)
+    vardata = Array(vardata)
+    slab = time_indices isa Colon ? vardata : selectdim(vardata, time_dim_num, time_indices)
+    _assert_shape_contract(slab, (z_dim_num, time_dim_num), "read_profiles_over_time")
+
+    perm = (
+        z_dim_num,
+        time_dim_num,
+        (dim for dim in 1:ndims(slab) if dim != z_dim_num && dim != time_dim_num)...,
+    )
+    slab = permutedims(slab, perm)
+    return reshape(slab, size(slab, 1), size(slab, 2))
+end
+
+"""
+    _materialize(x)
+
+Materialize any lazy `AbstractArray` (e.g. `DiskArrays.BroadcastDiskArray` produced
+by NCDatasets arithmetic like `ω ./ (ρ .* g)`) into a plain Julia `Array`.
+If the element type includes `Missing`, those values are replaced with `NaN` via
+`NCDatasets.nomissing(arr, NaN)`, narrowing the element type to `Float64`.
+
+This intentionally mirrors NCDatasets docs usage:
+- array conversion: `Array(var)`
+- missing handling: `NCDatasets.nomissing(...)`
+
+This is the boundary guard that prevents `Missing` from ever propagating into the
+package's interpolation and computation routines.
+"""
+function _materialize(x::AbstractArray)
+    arr = Array(x)
+    if Missing <: eltype(arr)
+        FT = Base.nonmissingtype(eltype(arr))
+        return NC.nomissing(arr, FT(NaN))
+    end
+    return arr
+end
+
+function _materialize(x::Array{T}) where {T}
+    if Missing <: T
+        FT = Base.nonmissingtype(T)
+        return NC.nomissing(x, FT(NaN))
+    end
+    return x
+end
+
 """
     data_to_tsg(data; thermo_params)
 
@@ -80,7 +161,7 @@ function data_to_tsg(data; thermo_params::TDPS)
 
     qg = (1 / molmass_ratio) .* pvg ./ (pg .- pvg) #Total water mixing ratio at surface , assuming saturation
 
-    tsg = TD.PhaseEquil_pTq.(thermo_params, pg, Tg, qg)
+    tsg = phase_equil_pTq.(thermo_params, pg, Tg, qg)
     return tsg
 end
 
@@ -96,7 +177,7 @@ function data_to_ts(data; do_combine_air_and_ground_data::Bool = false, thermo_p
     # put p/lev on correct dimension...
     p = align_along_dimension(p, get_dim_num("lev", data["T"]))
 
-    ts = TD.PhaseEquil_pTq.(thermo_params, p, T, q)
+    ts = phase_equil_pTq.(thermo_params, p, T, q)
 
     if do_combine_air_and_ground_data
         concat_dim = get_dim_num("lev", T) # phaseequil reduces us down to lev... can't seem to just apply ufunc...
@@ -124,9 +205,9 @@ function lev_to_z_from_LES_output_column(
     lesp;
     thermo_params::TDPS,
     interp_method::AbstractInterpolationMethod = FastLinear1DInterpolation,
-) where {TS <: TDTS}
+) where {TS}
     # Load pressure from the thermodynamic state
-    p_in = TD.air_pressure.(thermo_params, tsz)
+    p_in = air_pressure_compat.(thermo_params, tsz)
     # Interpolate z from the LES output to the pressure levels of the thermodynamic state
     z_out = interpolate_1d(p_in, lesp, lesz, interp_method; bc = ErrorBoundaryCondition())
     return z_out
@@ -171,28 +252,36 @@ function lev_to_z_from_LES_output(
         # handle times...
 
         # overall
-        summary_file = joinpath(dirname(@__DIR__), "Data", "SOCRATES_summary.nc")
+        summary_file = atlas_socrates_summary_file(flight_number)
         SOCRATES_summary = NC.Dataset(summary_file, "r")
-        flight_ind = findfirst(SOCRATES_summary["flight_number"][:] .== flight_number)
+        flight_ind = findfirst(vec(Array(SOCRATES_summary["flight_number"])) .== flight_number)
         initial_time = SOCRATES_summary["reference_time"][flight_ind] - Dates.Hour(12) # simulation start time is 12 hours before reference time, but set up socrates summary to give them all the same reference... (is in jupyter notebook somewhere)
 
         # input ( i think this uses same calendar as overall? idk...)
-        t_in = data["tsec"] # should just be seconds past initial_time
-        t_base = Dates.DateTime(string(data["bdate"][:]), Dates.DateFormat("yymmdd")) + Dates.Year(2000) # the base Date (using bdate not nbdate cause nbdate seems to have  bug in flight 9 (extra 0 in month spot))
+        t_in = Array(data["tsec"]) # should just be seconds past initial_time
+        bdate_data = Array(data["bdate"])
+        bdate_scalar = if bdate_data isa AbstractArray
+            non_missing = collect(skipmissing(vec(bdate_data)))
+            isempty(non_missing) && error("bdate is missing for flight $(flight_number)")
+            non_missing[1]
+        else
+            bdate_data
+        end
+        bdate_str = lpad(string(Int(round(bdate_scalar))), 6, '0')
+        t_base = Dates.DateTime(bdate_str, Dates.DateFormat("yymmdd")) + Dates.Year(2000) # the base Date (using bdate not nbdate cause nbdate seems to have  bug in flight 9 (extra 0 in month spot))
         t_in = t_base .+ Dates.Second.(t_in) # the actual dates
 
         t_in = (t_in .- initial_time) ./ Dates.Millisecond(1) # make it relative to the start of the simulation
         t_in ./= 1000 # Milliseconds to seconds
 
         # LES (this has no calendar, is just t in seconds, i *think* it's on the same t as 
-        t_les = LES_data["time"] # should just be seconds past initial_time
-        t_les = (t_les .- t_les[1]) * (24 * 3600 * 1000) # make it relative to the start of the simulation, and convert days to miliseconds (then round, bc Dates can't handle non integer amounts)
-        t_les ./= 1000 # Milliseconds to seconds
-        t_les = NCDatasets.nomissing(t_les[:])
+        t_les = Array(LES_data["time"]) # should just be seconds past initial_time
+        t_les = (t_les .- t_les[1]) .* (24 * 3600) # make it relative to the start of the simulation and convert days to seconds
+        t_les = NCDatasets.nomissing(t_les)
 
 
-        p_LES = NC.nomissing(p_LES[:]) .* 100 # convert to hPa to Pa
-        z_LES = NC.nomissing(z_LES[:])
+        p_LES = NC.nomissing(Array(p_LES)) .* 100 # convert to hPa to Pa
+        z_LES = NC.nomissing(Array(z_LES))
 
         # interpolate les output data to input times (instead of just choosing the `closest` hour like we did before... (need to apply by row)
         # i think you need to map this bc of the splines... but there's probably some way...
@@ -217,10 +306,10 @@ function lev_to_z_from_LES_output(
         increasing_p = false
 
         # add one for ground
-        len = length(selectdim(p_LES, tdn_LES, 1)[:])  # number of elements in the slice
+        len = length(selectdim(p_LES, tdn_LES, 1))
         p_LES_t = Vector{FTLES}(undef, len)
 
-        len = length(selectdim(tsz, tdn, 1)[:])
+        len = length(selectdim(tsz, tdn, 1))
         tsz_t_no_g = Vector{eltype(tsz)}(undef, len) # preallocate for type stability
         tsz_t = Vector{eltype(tsz)}(undef, len + 1)       # preallocate for type stability
         p_in_t_no_g = Vector{FTLES}(undef, len) # preallocate for type stability
@@ -232,21 +321,21 @@ function lev_to_z_from_LES_output(
             # LES does not span the full range of the input, so we need to do the LES for the LES range and then use the thickness equation outside that
             # Get min/max inds for input data that are covered by LES data
 
-            tsz_t_no_g .= selectdim(tsz, tdn, i_t)[:]
+            tsz_t_no_g .= vec(Array(selectdim(tsz, tdn, i_t)))
             tsgz = tsg[i_t]
 
-            p_in_t_no_g .= TD.air_pressure.(thermo_params, tsz_t_no_g[:])
+            p_in_t_no_g .= air_pressure_compat.(thermo_params, tsz_t_no_g)
             # p_in_min, p_in_max = extrema(p_in_t_no_g)
 
-            p_LES_t .= selectdim(p_LES, tdn_LES, i_t)[:]
+            p_LES_t .= vec(Array(selectdim(p_LES, tdn_LES, i_t)))
             p_LES_min, p_LES_max = extrema(p_LES_t)
 
-            p_s_in = TD.air_pressure(thermo_params, tsgz)
+            p_s_in = air_pressure_compat(thermo_params, tsgz)
 
             if isnothing(ground_indices)
-                index = searchsortedfirst(tsz_t_no_g, tsgz; by = x -> TD.air_pressure(thermo_params, x), rev = false) # find where the ground value would be inserted...
+                index = searchsortedfirst(tsz_t_no_g, tsgz; by = x -> air_pressure_compat(thermo_params, x), rev = false) # find where the ground value would be inserted...
             else
-                index = selectdim(ground_indices, tdn, i_t)[:][] # should just be one item
+                index = only(vec(Array(selectdim(ground_indices, tdn, i_t)))) # should just be one item
             end
 
             # sort them all same direction (LES to match input, and we're going with increasing_p for simplifying logic below (decreasing z))
@@ -275,7 +364,7 @@ function lev_to_z_from_LES_output(
 
             # handle data covered by LES
             selectdim(z, tdn, i_t)[i_t_min_p:i_t_max_p] =
-                lev_to_z_from_LES_output_column(tsz_t[i_t_min_p:i_t_max_p], z_LES[:], p_LES_t; thermo_params)
+                lev_to_z_from_LES_output_column(tsz_t[i_t_min_p:i_t_max_p], z_LES, p_LES_t; thermo_params)
 
 
             # Handle z's lower than LES Data (highest pressure to sfc) | use the thickness equation
@@ -290,9 +379,8 @@ function lev_to_z_from_LES_output(
             # Handle z's higher than LES Data | use the thickness equation and add to the top of the LES data
             selectdim(z, tdn, i_t)[1:(i_t_min_p - 1)] =
                 lev_to_z_column(tsz_t[1:i_t_min_p]; thermo_params)[1:(end - 1)] .+ z[i_t_min_p] # go from start to top and add to existing top...
-
-
-            selectdim(z, tdn, i_t)[:] .-= selectdim(z, tdn, i_t)[index] # subtract out the ground value
+            z_col = selectdim(z, tdn, i_t)
+            z_col .-= z_col[index] # subtract out the ground value
         end
 
         if !increasing_p
@@ -324,12 +412,12 @@ function lev_to_z_column(tsz; thermo_params::TDPS)
 
     L = length(ts)
 
-    index = searchsortedfirst(ts, tsg; by = x -> TD.air_pressure(thermo_params, x), rev = false) # find where the ground value would be inserted...
+    index = searchsortedfirst(ts, tsg; by = x -> air_pressure_compat(thermo_params, x), rev = false) # find where the ground value would be inserted...
     insert!(ts, index, tsg) # only seems to be an in place option...
     tsz = ts # replace with the reordered version
 
-    Tvz = TD.virtual_temperature.(thermo_params, tsz) # virtual temp, we havent returned these for now...
-    pz = TD.air_pressure.(thermo_params, tsz)
+    Tvz = virtual_temperature_compat.(thermo_params, tsz) # virtual temp, we havent returned these for now...
+    pz = air_pressure_compat.(thermo_params, tsz)
     Lz = L + 1 # cause we extended it using the ground...
     Tv_bar = Statistics.mean((Tvz[1:(Lz - 1)], Tvz[2:Lz]))
     p_frac = pz[2:Lz] ./ pz[1:(Lz - 1)]
@@ -360,8 +448,8 @@ end
 TODO: document
 """
 function lev_to_z(p::FT, T::FT, q::FT, pg::FT, Tg::FT, qg::FT; thermo_params::TDPS, data) where {FT <: Real}
-    ts = TD.PhaseEquil_pTq.(thermo_params, p, T, q)
-    tsg = TD.PhaseEquil_pTq.(thermo_params, pg, Tg, qg)
+    ts = phase_equil_pTq.(thermo_params, p, T, q)
+    tsg = phase_equil_pTq.(thermo_params, pg, Tg, qg)
     return lev_to_z(ts, tsg; data = data, thermo_params)
 end
 
@@ -375,12 +463,12 @@ tsg is thermodynamic state for ground
 if assume monotonic, everything should already be in the right order and we can use the vectorized version, otherwise we will use lev_to_z column applied column by column w/ mapslices
 """
 function lev_to_z(
-    ts::AbstractArray{TS},
-    tsg::AbstractArray{TS};
+    ts::AbstractArray{TS1},
+    tsg::AbstractArray{TS2};
     thermo_params::TDPS,
     data,
     assume_monotonic::Bool = false,
-) where {TS <: TDTS}
+) where {TS1, TS2}
 
     dimnames = NC.dimnames(data["T"]) # use this as default cause calculating ts doesn't maintain dim labellings
     lev_dim_num = findfirst(x -> x == "lev", dimnames)
@@ -402,13 +490,13 @@ function lev_to_z(
             ldn;
             data = data,
             reshape_ground = true,
-            insert_location = x -> TD.air_pressure(thermo_params, x),
+            insert_location = x -> air_pressure_compat(thermo_params, x),
         ) # this doesnt work in reality cause sometimes ps is more than the lowest value in lev... so we use the not assume_monotonic version mostly
 
         #actually we need to split dz into pos or neg depending on whether or not it's above ground... maybe best just to have fcn that goes along each column...
 
-        Tvz = TD.virtual_temperature.(thermo_params, tsz) # virtual temp, we havent returned these for now...
-        pz = TD.air_pressure.(thermo_params, tsz)
+        Tvz = virtual_temperature_compat.(thermo_params, tsz) # virtual temp, we havent returned these for now...
+        pz = air_pressure_compat.(thermo_params, tsz)
         Lz = L + 1 # cause we extended it using the ground...
         Tv_bar = Statistics.mean((selectdim(Tvz, ldn, 1:(Lz - 1)), selectdim(Tvz, lev_dim_num, 2:Lz)))
         p_frac = selectdim(pz, lev_dim_num, 2:Lz) ./ selectdim(pz, ldn, 1:(Lz - 1))
@@ -436,15 +524,23 @@ end
 Get the indices where the ground tsg would fit into the array ts...
 """
 function get_ground_insertion_indices(
-    ts::AbstractArray{TS},
-    tsg::AbstractArray{TS},
+    ts::AbstractArray{TS1},
+    tsg::AbstractArray{TS2},
     concat_dim::Union{Int, String};
     thermo_params::TDPS,
     data,
-) where {TS <: TDTS}
-    function mapslice_func(vect; thermo_params = thermo_params, by = x -> TD.air_pressure(thermo_params, x))
-        vardata = vect[1:(end - 1)]
+) where {TS1, TS2}
+    # Materialize lazy disk-backed broadcasts so reshape/cat/mapslices use stable Array methods.
+    ts = Array(ts)
+    tsg = Array(tsg)
+
+    function mapslice_func(vect; thermo_params = thermo_params, by = x -> air_pressure_compat(thermo_params, x))
+        vardata = collect(vect[1:(end - 1)])
+        filter!(!ismissing, vardata)
         vardatag = vect[end]
+        if ismissing(vardatag)
+            return length(vardata) + 1
+        end
         index = searchsortedfirst(vardata, vardatag; by = by, rev = false)
         return index
     end
@@ -492,13 +588,18 @@ function combine_air_and_ground_data(
             sz_vardatag = collect(size(vardata)) # array
             sz_vardatag[concat_dim] = 1
             vardatag = fill(vardatag, sz_vardatag...) # create array full with just this one value
-        elseif isa(vardatag, NC.CFVariable) # vardatag should not have lev as a dimension so we need to add it in (and I guess check the others are in the same order)
+        elseif hasmethod(NC.dimnames, Tuple{typeof(vardatag)}) # labeled array-like data (CFVariable moved to CommonDataModel in NCDatasets v0.14)
             dimnamesg = NC.dimnames(vardatag)
-            dimnames = NC.dimnames(vardata)
             # in same order as vardata just in case
             vardatag = reshape(vardatag, (size(vardatag)..., 1)) # add trailing singleton for lev
             dimnamesg = [dimnamesg..., "lev"]
-            vardatag = permutedims(vardatag, [findfirst(x -> x == dim, dimnames) for dim in dimnamesg]) # permute into the right order
+            if hasmethod(NC.dimnames, Tuple{typeof(vardata)})
+                dimnames = NC.dimnames(vardata)
+                vardatag = permutedims(vardatag, [findfirst(x -> x == dim, dimnames) for dim in dimnamesg]) # permute into the right order
+            elseif !isnothing(data) && haskey(data, "T")
+                dimnames = NC.dimnames(data["T"])
+                vardatag = permutedims(vardatag, [findfirst(x -> x == dim, dimnames) for dim in dimnamesg])
+            end
         elseif isa(vardatag, AbstractArray) # an unlabeled array, i think we can't guarantee then that the lev axis exists at all or what existing dimensions are so this just assumes everything is correct except the lev dimension being there
             # assume we need to add a new dimension at the same location as in the full array and order otherwise is preserved (quick check looks ok)
             sz_vardatag = collect(size(vardatag)) # array
@@ -514,13 +615,29 @@ function combine_air_and_ground_data(
         end
     end
 
-    # broadcast out to match sizes except for concat dim
+    # Broadcast out singleton dimensions to match sizes except for concat dim.
+    # We avoid integer-division based repeat factors because they can silently
+    # produce zeros for non-divisible shapes.
     sz_vardata = collect(size(vardata)) # array
     sz_vardatag = collect(size(vardatag)) # array
-    num_repeat = sz_vardatag .÷ sz_vardata # integer division
-    num_repeatg = sz_vardata .÷ sz_vardata # integer division
-    num_repeat[concat_dim] = 1 # don't repeat along concat dim
-    num_repeatg[concat_dim] = 1 # don't repeat along concat dim
+    length(sz_vardata) == length(sz_vardatag) ||
+        error("size mismatch, var and varg must have the same number of dimensions after reshape")
+    num_repeat = ones(Int, length(sz_vardata))
+    num_repeatg = ones(Int, length(sz_vardata))
+    for i in eachindex(sz_vardata)
+        i == concat_dim && continue
+        sz_a = sz_vardata[i]
+        sz_g = sz_vardatag[i]
+        if sz_a == sz_g
+            continue
+        elseif sz_a == 1
+            num_repeat[i] = sz_g
+        elseif sz_g == 1
+            num_repeatg[i] = sz_a
+        else
+            error("size mismatch in non-concat dimension $(i): var has $(sz_a), varg has $(sz_g)")
+        end
+    end
     vardatag = repeat(vardatag, num_repeatg...)
     vardata = repeat(vardata, num_repeat...)
 
@@ -545,14 +662,59 @@ function combine_air_and_ground_data(
             ) # insert the slice there...
         elseif isa(vardatag, AbstractArray) # an unlabeled array, i think we can't guarantee then that the lev axis exists at all or what existing dimensions are so this just assumes everything is correct except the lev dimension being there
             # assume we need to add a new dimension at the same location as in the full array and order otherwise is preserved (quick check looks ok)
+            insert_location_arr = insert_location
+            if ndims(insert_location_arr) == (ndims(vardata) - 1)
+                sz_insert = collect(size(insert_location_arr))
+                insert!(sz_insert, concat_dim, 1)
+                insert_location_arr = reshape(insert_location_arr, sz_insert...)
+            elseif ndims(insert_location_arr) != ndims(vardata)
+                error("insert_location must have the same number of dimensions as vardata (or one less without concat_dim)")
+            end
+
+            sz_data = collect(size(vardata))
+            sz_ground = collect(size(vardatag))
+            sz_insert = collect(size(insert_location_arr))
+
+            target_sz = copy(sz_data)
+            for i in eachindex(target_sz)
+                if i == concat_dim
+                    sz_insert[i] == 1 ||
+                        error("insert_location must have singleton concat dimension before insertion")
+                    continue
+                end
+                target_i = max(sz_data[i], sz_ground[i], sz_insert[i])
+                ((sz_data[i] == 1) || (sz_data[i] == target_i)) ||
+                    error("var shape mismatch in dimension $(i): expected $(target_i) or 1, got $(sz_data[i])")
+                ((sz_ground[i] == 1) || (sz_ground[i] == target_i)) ||
+                    error("varg shape mismatch in dimension $(i): expected $(target_i) or 1, got $(sz_ground[i])")
+                ((sz_insert[i] == 1) || (sz_insert[i] == target_i)) ||
+                    error("insert_location shape mismatch in dimension $(i): expected $(target_i) or 1, got $(sz_insert[i])")
+                target_sz[i] = target_i
+            end
+
+            repeat_data = ones(Int, length(target_sz))
+            repeat_ground = ones(Int, length(target_sz))
+            repeat_insert = ones(Int, length(target_sz))
+            for i in eachindex(target_sz)
+                i == concat_dim && continue
+                repeat_data[i] = target_sz[i] == sz_data[i] ? 1 : target_sz[i]
+                repeat_ground[i] = target_sz[i] == sz_ground[i] ? 1 : target_sz[i]
+                repeat_insert[i] = target_sz[i] == sz_insert[i] ? 1 : target_sz[i]
+            end
+
+            vardata = repeat(vardata, repeat_data...)
+            vardatag = repeat(vardatag, repeat_ground...)
+            insert_location_arr = repeat(insert_location_arr, repeat_insert...)
+
             mapslice_func = function (vect) # write this way cause can't define func inside conditional unless anonymous?, see https://github.com/JuliaLang/julia/issues/15602 , https://stackoverflow.com/a/65660721
-                vardata = vect[1:(end - 2)]
-                vardatag = vect[end - 1]
+                T = promote_type(typeof(vect[1]), typeof(vect[end - 1]))
+                vardata = T.(collect(vect[1:(end - 2)]))
+                vardatag = T(vect[end - 1])
                 insert_location = Int(vect[end]) # undo if was coerced to FT
                 # insert (a little more complicated now cause we aren't exactly getting the same size output... dont think that actually matters for mapslices...)
                 return insert!(vardata, insert_location, vardatag)
             end
-            vardata = cat(vardata, vardatag, insert_location; dims = concat_dim)
+            vardata = cat(vardata, vardatag, insert_location_arr; dims = concat_dim)
             vardata = mapslices(mapslice_func, vardata; dims = (concat_dim,))
         end
     else
@@ -571,16 +733,19 @@ end
 get the dimension number of dim from nc_data
 """
 get_dim_num(dim::Number, nc_data) = dim
-function get_dim_num(dim::String, nc_data::NC.CFVariable)
-    dimnames = NC.dimnames(nc_data)
-    dim_num = findfirst(x -> x == dim, dimnames)
-    return dim_num
+function get_dim_num(dim::String, nc_data)
+    if hasmethod(NC.dimnames, Tuple{typeof(nc_data)})
+        dimnames = NC.dimnames(nc_data)
+        dim_num = findfirst(x -> x == dim, dimnames)
+        return dim_num
+    elseif isa(nc_data, NC.NCDataset)
+        error("dimension number for a dataset is not well defined, use a specific variable with dimension labels instead")
+    elseif isa(nc_data, AbstractArray)
+        error("cannot find dimension $(dim) in unlabeled data nc_data, pass in a labeled NCDatasets variable instead...")
+    else
+        error("unsupported input type for nc_data $(typeof(nc_data))")
+    end
 end
-get_dim_num(dim::String, nc_data::NC.NCDataset) =
-    error("dimension number for a dataset is not well defined, use a speciifc NC.CFVariable instead")
-get_dim_num(dim::String, nc_data::AbstractArray) =
-    error("cannot find dimension $(dim) in unlabeled data nc_data, pass in a labeled NCDataset instead...")
-get_dim_num(dim::String, nc_data) = error("unsupported input type for nc_data $(typeof(nc_data))")
 
 # function get_dim_num(dim, nc_data = nothing)
 
@@ -660,7 +825,10 @@ function interp_along_dim(
 
     # get the interpolation dimension and combine air and ground data
     interp_dim_num = get_dim_num(interp_dim, vardata)
-    # vardata        = combine_air_and_ground_data(vardata ,vardatag, interp_dim_num; data=nothing, reshape_ground=true) # combine air and ground data... (also resolves strings to data)
+    # Materialize any lazy DiskArray (e.g. BroadcastDiskArray from NCDatasets arithmetic) and
+    # strip Union{Missing,Float64} → Float64.  Must happen AFTER get_dim_num while labels exist.
+    vardata = _materialize(vardata)
+    # vardata = combine_air_and_ground_data(vardata, vardatag, interp_dim_num; ...) # (unused)
 
     if !isnothing(data_func) # apply data_func if we need to
         vardata = data_func(vardata)
@@ -919,6 +1087,12 @@ function var_to_new_coord(
         interp_dim = isa(interp_dim, String) ? get_dim_num(interp_dim, vardata) : interp_dim # if interp_dim is a string, you need to provide the underlying data so we can get this dimension
     end
 
+    # Materialize any lazy DiskArray and strip Union{Missing,Float64} before vardata .* weight
+    # which would otherwise create a new BroadcastDiskArray.  Must happen AFTER interp_dim
+    # resolution while dimension labels may still be present on vardata.
+    vardata = _materialize(vardata)
+    isnothing(weight) || (weight = _materialize(weight))
+
     # evaluate interp_dim_in_is_full_array based on the size of the input... interp_dim_in is full array false is much faster cause dont have to double loop in vectorization...
 
     if isnothing(weight) # if weight is a number, we assume it's a scalar and we don't need to do anything
@@ -1100,15 +1274,12 @@ function get_data_new_z_t(
         z_old = z_from_data(data; thermo_params) # uses ground value to create the old z, pads bottom w/ 0
     end
     if isnothing(t_old)
-        t_old = data["tsec"][:] # check this unit was right in the files (may need to make sure it's subtracting out the first timestep so starts at 0) -- do we need to align this on a dimension?
+        t_old = vec(Array(data["tsec"])) # check this unit was right in the files (may need to make sure it's subtracting out the first timestep so starts at 0) -- do we need to align this on a dimension?
     end
 
     # t_base = Dates.DateTime(string(data["bdate"][:]), Dates.DateFormat("yymmdd")) + Dates.Year(2000) # the base Date (using bdate not nbdate cause nbdate seems to have  bug in flight 9 (extra 0 in month spot))
     # t      = t_base .+ Dates.Second.(t_old) # the actual dates
-    # summary_file = joinpath(dirname(@__DIR__), "Data", "SOCRATES_summary.nc")
-    # SOCRATES_summary = NC.Dataset(summary_file,"r")
-    # flight_ind = findfirst(SOCRATES_summary["flight_number"][:] .== flight_number)
-    # initial_time = SOCRATES_summary["reference_time"][flight_ind] - Dates.Hour(12) # change to select by flight number...
+    # summary information is resolved via atlas_socrates_summary_file(flight_number)
     # initial_ind = argmin(abs.((t.-initial_time))) # find the index of the initial time
     initial_ind = get_initial_ind(data, flight_number, t_old = t_old)
 
@@ -1253,7 +1424,7 @@ end
 
 function calc_qg_from_pgTg(pg, Tg, thermo_params::TDPS)
     ρg = TD.air_density(thermo_params, Tg, pg) # original T?
-    qg = TD.q_vap_saturation_generic(thermo_params, Tg, ρg, TD.Liquid()) # surface specific humidity over liquid
+    qg = TD.q_vap_saturation(thermo_params, Tg, ρg, TD.Liquid()) # surface specific humidity over liquid
     return qg
 end
 
@@ -1262,16 +1433,25 @@ Retrieve the starting index for our LES simulations (12 hours before reference f
 """
 function get_initial_ind(data, flight_number::Int; t_old = nothing)
     if isnothing(t_old)
-        t_old = data["tsec"][:] # check this unit was right in the files (may need to make sure it's subtracting out the first timestep so starts at 0) -- do we need to align this on a dimension?
+        t_old = Array(data["tsec"]) # check this unit was right in the files (may need to make sure it's subtracting out the first timestep so starts at 0) -- do we need to align this on a dimension?
     end
 
-    t_base = Dates.DateTime(string(data["bdate"][:]), Dates.DateFormat("yymmdd")) + Dates.Year(2000) # the base Date (using bdate not nbdate cause nbdate seems to have  bug in flight 9 (extra 0 in month spot))
+    bdate_data = Array(data["bdate"])
+    bdate_scalar = if bdate_data isa AbstractArray
+        non_missing = collect(skipmissing(vec(bdate_data)))
+        isempty(non_missing) && error("bdate is missing for flight $(flight_number)")
+        non_missing[1]
+    else
+        bdate_data
+    end
+    bdate_str = lpad(string(Int(round(bdate_scalar))), 6, '0')
+    t_base = Dates.DateTime(bdate_str, Dates.DateFormat("yymmdd")) + Dates.Year(2000) # the base Date (using bdate not nbdate cause nbdate seems to have  bug in flight 9 (extra 0 in month spot))
     t = t_base .+ Dates.Second.(t_old) # the actual dates
 
-    summary_file = joinpath(dirname(@__DIR__), "Data", "SOCRATES_summary.nc")
+    summary_file = atlas_socrates_summary_file(flight_number)
     SOCRATES_summary = NC.Dataset(summary_file, "r")
 
-    flight_ind = findfirst(SOCRATES_summary["flight_number"][:] .== flight_number)
+    flight_ind = findfirst(vec(Array(SOCRATES_summary["flight_number"])) .== flight_number)
     initial_time = SOCRATES_summary["reference_time"][flight_ind] - Dates.Hour(12) # change to select by flight number...
     initial_ind = argmin(abs.((t .- initial_time))) # find the index of the initial time
     return initial_ind
