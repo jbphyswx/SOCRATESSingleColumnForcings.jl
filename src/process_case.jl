@@ -114,20 +114,20 @@ function process_case(
             tg = tg .- tg[1] # i think we need this to get the initial time to be 0, so the interpolation works
             # in this interpolation, tsec has to be adjusted to our offsets no? or we clip e.g. pg to be pg[initial_ind:end], tsec would also need to be adjusted no?, subtract the value at initial_ind i guess...
             return (;
-                pg = let tg = tg, pg = pg # let block for performance of captured variables
-                    t -> interpolate_1d(t, tg, pg, FastLinear1DInterpolation; bc = ExtrapolateBoundaryCondition())
+                pg = let itp = build_spline(FastLinear1DInterpolation, tg, pg; bc = ExtrapolateBoundaryCondition()) # build interpolant ONCE, evaluate alloc-free (matches the forcing's stored-object pattern)
+                    itp
                 end,
-                Tg = let tg = tg, Tg = Tg # let block for performance of captured variables
-                    t -> interpolate_1d(t, tg, Tg, FastLinear1DInterpolation; bc = ExtrapolateBoundaryCondition())
+                Tg = let itp = build_spline(FastLinear1DInterpolation, tg, Tg; bc = ExtrapolateBoundaryCondition()) # build interpolant ONCE, evaluate alloc-free (matches the forcing's stored-object pattern)
+                    itp
                 end,
-                Tsfc = let tg = tg, Tg = Tg_orig # let block for performance of captured variables [ we need to store the SST -- while it's true qg can be calculated from Tg initially, for correct sensible and latent heat fluxes we need the actual ground temp value ]
-                    t -> interpolate_1d(t, tg, Tg, FastLinear1DInterpolation; bc = ExtrapolateBoundaryCondition())
+                Tsfc = let itp = build_spline(FastLinear1DInterpolation, tg, Tg_orig; bc = ExtrapolateBoundaryCondition()) # build ONCE, eval alloc-free [ Tg_orig = SST, stored for correct sensible/latent heat fluxes ]
+                    itp
                 end,
-                qg = let tg = tg, qg = qg # let block for performance of captured variables
-                    t -> interpolate_1d(t, tg, qg, FastLinear1DInterpolation; bc = ExtrapolateBoundaryCondition())
+                qg = let itp = build_spline(FastLinear1DInterpolation, tg, qg; bc = ExtrapolateBoundaryCondition()) # build interpolant ONCE, evaluate alloc-free (matches the forcing's stored-object pattern)
+                   itp
                 end,
-                qsfc = let tg = tg, qg = qg_orig # let block for performance of captured variables # this is the q* of the Tsfc, the actual ground value. However I'm not sure we should actually use this as our surface q, evaporation from sfc will pull us towards it.
-                    t -> interpolate_1d(t, tg, qg, FastLinear1DInterpolation; bc = ExtrapolateBoundaryCondition())
+                qsfc = let itp = build_spline(FastLinear1DInterpolation, tg, qg_orig; bc = ExtrapolateBoundaryCondition()) # build ONCE, eval alloc-free # qg_orig = q* of Tsfc (actual ground value). Not sure we should use as surface q — evaporation pulls towards it.
+                    itp
                 end,
             ) # would use ref and broadcast but doesnt convert back to array
         else
