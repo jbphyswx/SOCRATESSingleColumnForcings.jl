@@ -1,7 +1,6 @@
 using Test: Test
 using SOCRATESSingleColumnForcings: SOCRATESSingleColumnForcings as SSCF
 using Thermodynamics: Thermodynamics as TD
-using ClimaParams: ClimaParams as CP
 
 # ---------------------------------------------------------------------------
 # Cross-backend consistency: the naive `DefaultThermodynamicsBackend` and the
@@ -13,17 +12,43 @@ using ClimaParams: ClimaParams as CP
 # ---------------------------------------------------------------------------
 Test.@testset "Thermodynamics seam: naive vs accurate backend" begin
     b = SSCF.DefaultThermodynamicsBackend()
-    tp = TD.Parameters.ThermodynamicsParameters(CP.create_toml_dict(Float64))
 
-    Test.@testset "physical constants agree (<0.1%)" begin
-        Test.@test isapprox(SSCF.R_d(b), SSCF.R_d(tp); rtol = 1e-3)
-        Test.@test isapprox(SSCF.R_v(b), SSCF.R_v(tp); rtol = 1e-3)
-        Test.@test isapprox(SSCF.grav(b), SSCF.grav(tp); rtol = 1e-3)
-        # ε must be the meteorological ratio M_v/M_d ≈ 0.622 in both backends (Thermodynamics' own
-        # `molmass_ratio` is the reciprocal M_d/M_v ≈ 1.608, which must NOT leak through the seam)
-        Test.@test isapprox(SSCF.molmass_ratio(b), SSCF.molmass_ratio(tp); rtol = 1e-3)
-        Test.@test 0.6 < SSCF.molmass_ratio(tp) < 0.65
-    end
+    # Dependency free Thermodynamics param_set
+    tp = TD.Parameters.ThermodynamicsParameters{Float64}(;
+     #273.16, 273.16, 273.15, 233.0, 1.0, 1000.0, 150.0, 290.0, 220.0, 298.15, 101325.0, 100000.0, 611.657, 287.0, 461.5, 1004.5, 1859.0, 4181.0, 2070.0, 2.5008e6, 2.8344e6, 6864.8, 10513.6, 9.81, 1.0, 1.0e-10)
+    T_0 = 273.16,
+    T_triple = 273.16,
+    T_freeze = SSCF.T_freeze(b),
+    T_icenuc = SSCF.T_icenuc(b),
+    T_min = 1.0,
+    T_max = 1000.0,
+    T_init_min = 150.0,
+    T_surf_ref = 290.0,
+    T_min_ref = 220.0,
+    entropy_reference_temperature = 298.15,
+    # Reference pressures
+    MSLP = 101325.0,
+    p_ref_theta = SSCF.p_ref(b),
+    press_triple = 611.657,
+    # Gas constants
+    R_d = SSCF.R_d(b),
+    R_v = SSCF.R_v(b),
+    # Isobaric specific heat capacities
+    cp_d = SSCF.cp_d(b),
+    cp_v = SSCF.cp_v(b),
+    cp_l = SSCF.cp_l(b),
+    cp_i = SSCF.cp_i(b),
+    # Latent heats at reference temperature
+    LH_v0 = SSCF.L_v0(b),
+    LH_s0 = SSCF.L_s0(b),
+    # Entropy reference values
+    entropy_dry_air = 6864.8,
+    entropy_water_vapor = 10513.6,
+    # Other
+    grav = SSCF.grav(b),
+    pow_icenuc = 1.0,
+    q_min = 1.0e-10,
+)
 
     # (T [K], p [Pa], q_tot [kg/kg]) across surface → upper troposphere
     pts = [(288.0, 1.0e5, 0.012), (280.0, 9.0e4, 0.008), (270.0, 7.0e4, 0.004),

@@ -1,5 +1,4 @@
 using Test: Test
-using ClimaParams: ClimaParams as CP
 using SOCRATESSingleColumnForcings: SOCRATESSingleColumnForcings as SSCF
 using Thermodynamics: Thermodynamics as TD
 using NonNegLeastSquares: NonNegLeastSquares  # activates the NNLS extension so enforce_positivity is exercised

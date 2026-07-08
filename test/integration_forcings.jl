@@ -10,7 +10,7 @@
 # ---------------------------------------------------------------------------
 Test.@testset "SOCRATESSingleColumnForcings integration" begin
     FT = Float64
-    tp = TD.Parameters.ThermodynamicsParameters(CP.create_toml_dict(FT))
+    tp = SSCF.DefaultThermodynamicsBackend()
 
     # `enforce_positivity` requires the NonNegLeastSquares extension; detect it.
     _nnls_loaded =
