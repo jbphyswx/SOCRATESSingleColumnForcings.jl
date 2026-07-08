@@ -27,7 +27,7 @@ jobs:
         arch:
           - x64
     env:
-      SSCF_SKIP_INTEGRATION_TESTS: 'true'
+      SSCF_SKIP_INTEGRATION_TESTS: 'false'  # run integration on every matrix job (data auto-downloads via lazy artifacts)
     steps:
       - uses: actions/checkout@v4
       - uses: julia-actions/setup-julia@v2

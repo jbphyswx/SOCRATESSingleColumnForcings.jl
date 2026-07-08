@@ -9,20 +9,6 @@ using SOCRATESSingleColumnForcings: SOCRATESSingleColumnForcings as SSCF
 thisdir = @__DIR__ # doesn't seem to work to use @__DIR__ directly as a variable
 const package_data_dir = dirname(thisdir)
 
-function _copytree_contents!(src::AbstractString, dst::AbstractString)
-    for name in readdir(src)
-        src_path = joinpath(src, name)
-        dst_path = joinpath(dst, name)
-        if isdir(src_path)
-            mkpath(dst_path)
-            _copytree_contents!(src_path, dst_path)
-        else
-            cp(src_path, dst_path; force = true)
-        end
-    end
-    return dst
-end
-
 function _download_first(urls, savepath::AbstractString)
     found = false
     for url in urls
@@ -42,218 +28,67 @@ function _download_first(urls, savepath::AbstractString)
 end
 
 _rf_num(flight::Int) = "RF" * string(flight, pad = 2)
-_inputs_artifact_name(flight::Int) = "atlas_les_inputs_" * lowercase(_rf_num(flight)) * "_v1"
-_outputs_artifact_name(flight::Int) = "atlas_les_outputs_" * lowercase(_rf_num(flight)) * "_v1"
 
-function _artifact_dir(name::String)
-    hash = Artifacts.artifact_hash(name, SSCF.artifacts_toml)
-    return isnothing(hash) ? nothing : Artifacts.artifact_path(hash)
+# Artifact names: one per (flight, forcing) for the input & output forcing `.nc` files, plus a single
+# shared metadata artifact holding `SOCRATES_summary.nc` + the two unique level grids. Each is declared
+# as a lazy download artifact in the package `Artifacts.toml` (no data is duplicated across artifacts).
+_forcing_tag(::ObsForcing) = "obs"
+_forcing_tag(::ERA5Forcing) = "era5"
+_inputs_artifact_name(flight::Int, ft::AbstractForcingType) =
+    "atlas_les_inputs_" * lowercase(_rf_num(flight)) * "_" * _forcing_tag(ft) * "_v1"
+_outputs_artifact_name(flight::Int, ft::AbstractForcingType) =
+    "atlas_les_outputs_" * lowercase(_rf_num(flight)) * "_" * _forcing_tag(ft) * "_v1"
+const _metadata_artifact_name = "atlas_les_metadata_v1"
+
+# Resolve a declared (lazy) artifact by name to its on-disk path, downloading on first use from the
+# `[[<name>.download]]` mirror(s) in `Artifacts.toml`. `LazyArtifacts` (loaded by the module) enables the
+# on-demand download; nothing is written to the package's `Artifacts.toml` at runtime, so this works in
+# read-only depots and offline once cached.
+function _artifact_root(name::AbstractString)
+    Pkg.Artifacts.ensure_artifact_installed(name, SSCF.artifacts_toml)
+    return Pkg.Artifacts.artifact_path(Pkg.Artifacts.artifact_hash(name, SSCF.artifacts_toml))
 end
 
-function _required_input_files(flight::Int, forcing_types)
-    RF_num = _rf_num(flight)
-    req = [RF_num * "_grd.txt"]
-    for forcing_type in forcing_types
-        if forcing_type == :obs_data
-            push!(req, RF_num * "_obs-based_SAM_input.nc")
-        elseif forcing_type == :ERA5_data
-            push!(req, RF_num * "_ERA5-based_SAM_input_mar18_2022.nc")
-        else
-            error("forcing_type must be :obs_data or :ERA5_data")
-        end
-    end
-    return req
-end
 
-function _required_output_files(flight::Int, forcing_types)
-    RF_num = _rf_num(flight)
-    req = [RF_num * "_grd.txt"]
-    for forcing_type in forcing_types
-        if forcing_type == :obs_data
-            push!(req, RF_num * "_Obs_SOCRATES_128x128_100m_10s_rad10_vg_M2005_aj.nc")
-        elseif forcing_type == :ERA5_data
-            push!(req, RF_num * "_ERA5_SOCRATES_128x128_100m_10s_rad10_vg_M2005_aj.nc")
-        else
-            error("forcing_type must be :obs_data or :ERA5_data")
-        end
-    end
-    return req
-end
+# ---------------------------------------------------------------------------------------------------
+# Runtime resolution: each artifact is a DECLARED lazy artifact in `Artifacts.toml` (git-tree-sha1 +
+# `[[download]]` mirror(s) — GitHub release / Zenodo). `_artifact_root` downloads it on first use and
+# returns its path. No `create_artifact`/`bind_artifact!` at runtime (that path — which mutated the
+# package `Artifacts.toml` and broke in read-only depots / CI — is gone). Regenerating the tarballs from
+# the raw Box files is a separate maintenance tool below (`regenerate_artifact_tarballs`).
+# ---------------------------------------------------------------------------------------------------
 
 """
-    atlas_les_inputs_root(flight; forcing_types = (:obs_data,), ...)
+    atlas_les_inputs_root(flight, forcing_type)
 
-Return the artifact directory for flight `flight` input files, downloading and
-registering artifacts if required files are missing.
+On-disk directory of the input-forcing artifact for `(flight, forcing_type)` — one `.nc` at its root
+(`RFNN_<obs|ERA5>…_SAM_input…nc`). Lazily downloaded on first use (see `Artifacts.toml`).
 """
-function atlas_les_inputs_root(
-    flight::Int;
-    forcing_types::Union{AbstractArray{Symbol}, Tuple{Vararg{Symbol}}} = (:obs_data,),
-    SOCRATES_LES_inputs_Box_links::Dict{String, String} = SOCRATES_LES_inputs_Box_links,
-)
-    name = _inputs_artifact_name(flight)
-    existing = _artifact_dir(name)
-    input_data_dir = isnothing(existing) ? nothing : joinpath(existing, "Input_Data")
-    required = _required_input_files(flight, forcing_types)
-    summary_artifact_file = isnothing(existing) ? nothing : joinpath(existing, "SOCRATES_summary.nc")
-    has_required = !isnothing(existing) &&
-                   all(isfile(joinpath(input_data_dir, file)) for file in required) &&
-                   isfile(summary_artifact_file)
-    if has_required
-        return existing
-    end
-
-    RF_num = _rf_num(flight)
-    new_hash = Pkg.Artifacts.create_artifact() do artifact_dir
-        if !isnothing(existing)
-            _copytree_contents!(existing, artifact_dir)
-        end
-
-        out_dir = joinpath(artifact_dir, "Input_Data")
-        mkpath(out_dir)
-
-        for forcing_type in forcing_types
-            if forcing_type == :obs_data
-                obs_filename = RF_num * "_obs-based_SAM_input.nc"
-                obs_savepath = joinpath(out_dir, obs_filename)
-                if !isfile(obs_savepath)
-                    urls = (
-                        get(SOCRATES_LES_inputs_Box_links, obs_filename, nothing),
-                        uw_atlas_base_url * obs_filename,
-                    )
-                    found = _download_first(urls, obs_savepath)
-                    !found && @error "Did not find obs forcing for $RF_num in $(urls)"
-                end
-            elseif forcing_type == :ERA5_data
-                ERA5_filename = RF_num * "_ERA5-based_SAM_input_mar18_2022.nc"
-                ERA5_savepath = joinpath(out_dir, ERA5_filename)
-                if !isfile(ERA5_savepath)
-                    urls = (
-                        get(SOCRATES_LES_inputs_Box_links, ERA5_filename, nothing),
-                        uw_atlas_base_url * ERA5_filename,
-                    )
-                    found = _download_first(urls, ERA5_savepath)
-                    !found && @error "Did not find ERA5 forcing for $RF_num in $(urls)"
-                end
-            else
-                error("forcing_type must be :obs_data or :ERA5_data")
-            end
-        end
-
-        grid_filename = RF_num * "_grd.txt"
-        grid_savepath = joinpath(out_dir, grid_filename)
-        if !isfile(grid_savepath)
-            grid_height = SSCF.grid_heights[flight]
-            urls = (
-                get(SOCRATES_LES_inputs_Box_links, string(grid_height) * "level-grd.txt", nothing),
-                uw_atlas_base_url * string(grid_height) * "level-grd.txt",
-            )
-            found = _download_first(urls, grid_savepath)
-            !found && @error "Did not find grid file for $RF_num in $(urls)"
-        end
-
-        summary_src = joinpath(package_data_dir, "SOCRATES_summary.nc")
-        summary_dst = joinpath(artifact_dir, "SOCRATES_summary.nc")
-        if isfile(summary_src) && !isfile(summary_dst)
-            cp(summary_src, summary_dst; force = true)
-        end
-    end
-
-    Pkg.Artifacts.bind_artifact!(SSCF.artifacts_toml, name, new_hash; force = true)
-    return Artifacts.artifact_path(new_hash)
-end
+atlas_les_inputs_root(flight::Int, forcing_type::AbstractForcingType) =
+    _artifact_root(_inputs_artifact_name(flight, forcing_type))
 
 """
-    atlas_les_outputs_root(flight; forcing_types = (:obs_data, :ERA5_data), ...)
+    atlas_les_outputs_root(flight, forcing_type)
 
-Return the artifact directory for flight `flight` LES output files, downloading and
-registering artifacts if required files are missing.
+On-disk directory of the output-forcing (LES) artifact for `(flight, forcing_type)` — one `.nc` at its
+root. Lazily downloaded on first use.
 """
-function atlas_les_outputs_root(
-    flight::Int;
-    forcing_types::Union{AbstractArray{Symbol}, Tuple{Vararg{Symbol}}} = (:obs_data, :ERA5_data),
-    SOCRATES_LES_outputs_Box_links::Dict{String, String} = SOCRATES_LES_outputs_Box_links,
-    SOCRATES_LES_inputs_Box_links::Dict{String, String} = SOCRATES_LES_inputs_Box_links,
-)
-    name = _outputs_artifact_name(flight)
-    existing = _artifact_dir(name)
-    output_data_dir = isnothing(existing) ? nothing : joinpath(existing, "Output_Data")
-    required = _required_output_files(flight, forcing_types)
-    has_required = !isnothing(existing) && all(isfile(joinpath(output_data_dir, file)) for file in required)
-    if has_required
-        return existing
-    end
+atlas_les_outputs_root(flight::Int, forcing_type::AbstractForcingType) =
+    _artifact_root(_outputs_artifact_name(flight, forcing_type))
 
-    RF_num = _rf_num(flight)
-    new_hash = Pkg.Artifacts.create_artifact() do artifact_dir
-        if !isnothing(existing)
-            _copytree_contents!(existing, artifact_dir)
-        end
+"""
+    atlas_les_metadata_root()
 
-        out_dir = joinpath(artifact_dir, "Output_Data")
-        mkpath(out_dir)
+On-disk directory of the shared metadata artifact: `SOCRATES_summary.nc` + the two level grids
+(`192level-grd.txt`, `320level-grd.txt`). A flight's grid is `\$(grid_heights[flight])level-grd.txt`.
+"""
+atlas_les_metadata_root() = _artifact_root(_metadata_artifact_name)
 
-        for forcing_type in forcing_types
-            if forcing_type == :obs_data
-                obs_filename = RF_num * "_output/obs/SOCRATES_128x128_100m_10s_rad10_vg_M2005_aj.nc"
-                obs_savepath = joinpath(out_dir, RF_num * "_Obs_SOCRATES_128x128_100m_10s_rad10_vg_M2005_aj.nc")
-                if !isfile(obs_savepath)
-                    urls = (
-                        get(
-                            SOCRATES_LES_outputs_Box_links,
-                            RF_num * "_obs_SOCRATES_128x128_100m_10s_rad10_vg_M2005_aj.nc",
-                            nothing,
-                        ),
-                        uw_atlas_base_url * obs_filename,
-                    )
-                    found = _download_first(urls, obs_savepath)
-                    !found && @error "Did not find obs forcing for $RF_num in $(urls)"
-                end
-            elseif forcing_type == :ERA5_data
-                ERA5_filename = RF_num * "_output/era5/SOCRATES_128x128_100m_10s_rad10_vg_M2005_aj.nc"
-                ERA5_savepath = joinpath(out_dir, RF_num * "_ERA5_SOCRATES_128x128_100m_10s_rad10_vg_M2005_aj.nc")
-                if !isfile(ERA5_savepath)
-                    urls = (
-                        get(
-                            SOCRATES_LES_outputs_Box_links,
-                            RF_num * "_ERA5_SOCRATES_128x128_100m_10s_rad10_vg_M2005_aj.nc",
-                            nothing,
-                        ),
-                        uw_atlas_base_url * ERA5_filename,
-                    )
-                    found = _download_first(urls, ERA5_savepath)
-                    !found && @error "Did not find ERA5 forcing for $RF_num in either $(urls)"
-                end
-            else
-                error("forcing_type must be :obs_data or :ERA5_data")
-            end
-        end
+"Path to `SOCRATES_summary.nc` (in the shared metadata artifact). `flight_number` is accepted for call-site compatibility; the summary is flight-independent."
+atlas_socrates_summary_file(flight_number::Int) = joinpath(atlas_les_metadata_root(), "SOCRATES_summary.nc")
 
-        grid_filename = RF_num * "_grd.txt"
-        grid_savepath = joinpath(out_dir, grid_filename)
-        if !isfile(grid_savepath)
-            grid_height = SSCF.grid_heights[flight]
-            urls = (
-                get(SOCRATES_LES_inputs_Box_links, string(grid_height) * "level-grd.txt", nothing),
-                uw_atlas_base_url * string(grid_height) * "level-grd.txt",
-            )
-            found = _download_first(urls, grid_savepath)
-            !found && @error "Did not find output-grid file for $RF_num in $(urls)"
-        end
-    end
-
-    Pkg.Artifacts.bind_artifact!(SSCF.artifacts_toml, name, new_hash; force = true)
-    return Artifacts.artifact_path(new_hash)
-end
-
-function atlas_socrates_summary_file(flight_number::Int)
-    artifact_dir = atlas_les_inputs_root(flight_number; forcing_types = (:obs_data,))
-    summary_file = joinpath(artifact_dir, "SOCRATES_summary.nc")
-    if isfile(summary_file)
-        return summary_file
-    end
-    return joinpath(package_data_dir, "SOCRATES_summary.nc")
-end
+"Path to the level-grid file for `flight` (in the shared metadata artifact), selected via `grid_heights`."
+atlas_grid_file(flight::Int) = joinpath(atlas_les_metadata_root(), string(SSCF.grid_heights[flight]) * "level-grd.txt")
 
 # download forcings for each flight
 
@@ -367,48 +202,65 @@ const SOCRATES_LES_outputs_Box_links = Dict{String, String}( # We have to save e
 
 
 
-"""
-    download_atlas_les_inputs(; flight_numbers = flight_numbers, forcing_types = (:obs_data,), ...)
+# ---------------------------------------------------------------------------------------------------
+# Raw retrieval / regeneration from Box (NOT the runtime path). The package serves data at runtime via
+# the declared lazy artifacts in `Artifacts.toml`; these helpers fetch the raw per-file data from the
+# canonical Box source into a directory so the artifact tarballs can be (re)built and re-uploaded:
+#   dir = download_atlas_les_inputs(mktempdir()); download_atlas_les_outputs(dir)
+#   # then per (flight,forcing): Pkg.Artifacts.create_artifact() do d; cp(nc, ...); end; archive_artifact(h, "name.tar.gz")
+# The Box links + `_download_first` are the retained canonical raw source.
+# ---------------------------------------------------------------------------------------------------
 
-Download Atlas LES *input* forcing files and register them as Julia artifacts.
 """
-function download_atlas_les_inputs(;
+    download_atlas_les_inputs(destdir; flight_numbers, forcing_types = (:obs_data, :ERA5_data))
+
+Download the raw Atlas LES *input* files (per forcing `.nc` + level grids) from Box into `destdir`.
+"""
+function download_atlas_les_inputs(
+    destdir::AbstractString;
     flight_numbers::Union{AbstractArray{Int}, Tuple{Vararg{Int}}} = flight_numbers,
-    forcing_types::Union{AbstractArray{Symbol}, Tuple{Vararg{Symbol}}} = (:obs_data,),
+    forcing_types::Union{AbstractArray{Symbol}, Tuple{Vararg{Symbol}}} = (:obs_data, :ERA5_data),
     SOCRATES_LES_inputs_Box_links::Dict{String, String} = SOCRATES_LES_inputs_Box_links,
 )
+    mkpath(destdir)
     for flight in flight_numbers
-        atlas_les_inputs_root(
-            flight;
-            forcing_types = forcing_types,
-            SOCRATES_LES_inputs_Box_links = SOCRATES_LES_inputs_Box_links,
-        )
+        RF_num = _rf_num(flight)
+        for forcing_type in forcing_types
+            fn = forcing_type === :obs_data ? RF_num * "_obs-based_SAM_input.nc" :
+                 forcing_type === :ERA5_data ? RF_num * "_ERA5-based_SAM_input_mar18_2022.nc" :
+                 error("forcing_type must be :obs_data or :ERA5_data")
+            urls = (get(SOCRATES_LES_inputs_Box_links, fn, nothing), uw_atlas_base_url * fn)
+            _download_first(urls, joinpath(destdir, fn)) || @warn "input not found on Box/UW: $fn"
+        end
+        gfn = string(SSCF.grid_heights[flight]) * "level-grd.txt"
+        urls = (get(SOCRATES_LES_inputs_Box_links, gfn, nothing), uw_atlas_base_url * gfn)
+        _download_first(urls, joinpath(destdir, gfn)) || @warn "grid not found on Box/UW: $gfn"
     end
-    return nothing
+    return destdir
 end
 
-
-
-
-
-
 """
-    download_atlas_les_outputs(; flight_numbers = flight_numbers, forcing_types = (:obs_data, :ERA5_data), ...)
+    download_atlas_les_outputs(destdir; flight_numbers, forcing_types = (:obs_data, :ERA5_data))
 
-Download Atlas LES *output* files and register them as Julia artifacts.
+Download the raw Atlas LES *output* files from Box into `destdir`.
 """
-function download_atlas_les_outputs(;
+function download_atlas_les_outputs(
+    destdir::AbstractString;
     flight_numbers::Union{AbstractArray{Int}, Tuple{Vararg{Int}}} = flight_numbers,
     forcing_types::Union{AbstractArray{Symbol}, Tuple{Vararg{Symbol}}} = (:obs_data, :ERA5_data),
     SOCRATES_LES_outputs_Box_links::Dict{String, String} = SOCRATES_LES_outputs_Box_links,
 )
+    mkpath(destdir)
+    suffix = "_SOCRATES_128x128_100m_10s_rad10_vg_M2005_aj.nc"
     for flight in flight_numbers
-        atlas_les_outputs_root(
-            flight;
-            forcing_types = forcing_types,
-            SOCRATES_LES_outputs_Box_links = SOCRATES_LES_outputs_Box_links,
-            SOCRATES_LES_inputs_Box_links = SOCRATES_LES_inputs_Box_links,
-        )
+        RF_num = _rf_num(flight)
+        for forcing_type in forcing_types
+            tag = forcing_type === :obs_data ? "obs" : forcing_type === :ERA5_data ? "ERA5" :
+                  error("forcing_type must be :obs_data or :ERA5_data")
+            fn = RF_num * "_" * tag * suffix
+            urls = (get(SOCRATES_LES_outputs_Box_links, fn, nothing), uw_atlas_base_url * RF_num * "_output/" * lowercase(tag) * "/SOCRATES_128x128_100m_10s_rad10_vg_M2005_aj.nc")
+            _download_first(urls, joinpath(destdir, fn)) || @warn "output not found on Box/UW: $fn"
+        end
     end
-    return nothing
+    return destdir
 end

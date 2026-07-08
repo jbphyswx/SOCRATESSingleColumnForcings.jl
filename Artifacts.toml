@@ -1,35 +1,184 @@
-[atlas_les_inputs_rf01_v1]
-git-tree-sha1 = "632455e6ae2e7adca94bf53b3ed8fa4f935c1c04"
+[atlas_les_metadata_v1]
+git-tree-sha1 = "a21a8abad479d35613323cdd98b25a976870ceea"
+lazy = true
 
-[atlas_les_inputs_rf09_v1]
-git-tree-sha1 = "9ae258e7e3c79d2a85ada0b85e301589caa7e455"
+    [[atlas_les_metadata_v1.download]]
+    url = "https://github.com/jbphyswx/SOCRATESSingleColumnForcings.jl/releases/download/data-v1/atlas_les_metadata_v1.tar.gz"
+    sha256 = "ff2c111f850223e47bd93db49df2d7073d388208d61808c8a936968fff6d84a7"
 
-[atlas_les_inputs_rf10_v1]
-git-tree-sha1 = "b1491fa72f3db496b0ac61e60f29033b0f365704"
+[atlas_les_inputs_rf01_obs_v1]
+git-tree-sha1 = "f075d1a44ef14cdc4525e00c52506f1892597c38"
+lazy = true
 
-[atlas_les_inputs_rf11_v1]
-git-tree-sha1 = "65b44377f2844129282d1d2df618a9412f97ed35"
+    [[atlas_les_inputs_rf01_obs_v1.download]]
+    url = "https://github.com/jbphyswx/SOCRATESSingleColumnForcings.jl/releases/download/data-v1/atlas_les_inputs_rf01_obs_v1.tar.gz"
+    sha256 = "a31269d16de4a3ef0432482fe5c685f192d8be2df8754965ee44daf22d74cdc9"
 
-[atlas_les_inputs_rf12_v1]
-git-tree-sha1 = "3e133747060a0b6e93d5c942d5c71ce69e476419"
+[atlas_les_inputs_rf01_era5_v1]
+git-tree-sha1 = "d4133822ec89850ca1ec813ca7dbd27e11dd229f"
+lazy = true
 
-[atlas_les_inputs_rf13_v1]
-git-tree-sha1 = "2cd82fe19914e1be14ef601f1a81d4dedf6638a0"
+    [[atlas_les_inputs_rf01_era5_v1.download]]
+    url = "https://github.com/jbphyswx/SOCRATESSingleColumnForcings.jl/releases/download/data-v1/atlas_les_inputs_rf01_era5_v1.tar.gz"
+    sha256 = "03b6d85d038248cbca0107ed4bdae3664a3ba180ba98e82b01a9775e5e435ace"
 
-[atlas_les_outputs_rf01_v1]
-git-tree-sha1 = "68e29141da5348a089565945e2a7cf1a89430a2d"
+[atlas_les_inputs_rf09_obs_v1]
+git-tree-sha1 = "6d14214cfd295c534609b95e272dbde307ff18ef"
+lazy = true
 
-[atlas_les_outputs_rf09_v1]
-git-tree-sha1 = "b47970631744d2d32451847ffc1a54b3460ca4b5"
+    [[atlas_les_inputs_rf09_obs_v1.download]]
+    url = "https://github.com/jbphyswx/SOCRATESSingleColumnForcings.jl/releases/download/data-v1/atlas_les_inputs_rf09_obs_v1.tar.gz"
+    sha256 = "ec95f000449a83b90b06897e4d8bfe92d7113411dfe3fe20c21d79605c687c6b"
 
-[atlas_les_outputs_rf10_v1]
-git-tree-sha1 = "99988715fcfd7fecef438926f69c4192f4773b62"
+[atlas_les_inputs_rf09_era5_v1]
+git-tree-sha1 = "331cd2e0f1f831246b37bb9a10d78bed1f554f95"
+lazy = true
 
-[atlas_les_outputs_rf11_v1]
-git-tree-sha1 = "cc1b2c55a3ac0d082d7c062ae3f67987f862c339"
+    [[atlas_les_inputs_rf09_era5_v1.download]]
+    url = "https://github.com/jbphyswx/SOCRATESSingleColumnForcings.jl/releases/download/data-v1/atlas_les_inputs_rf09_era5_v1.tar.gz"
+    sha256 = "bf7a1e774103960cd6c9a7c387999959e3c904c767a38881dcb65aa2d2bd874a"
 
-[atlas_les_outputs_rf12_v1]
-git-tree-sha1 = "c167be70db1730df254eacaf70aa0b70a1a0f7be"
+[atlas_les_inputs_rf10_obs_v1]
+git-tree-sha1 = "5a2f039abd221c66afe4b68bdeb4a0818a878faf"
+lazy = true
 
-[atlas_les_outputs_rf13_v1]
-git-tree-sha1 = "c3576d16b1fd391e2a7790bcb537012f79066617"
+    [[atlas_les_inputs_rf10_obs_v1.download]]
+    url = "https://github.com/jbphyswx/SOCRATESSingleColumnForcings.jl/releases/download/data-v1/atlas_les_inputs_rf10_obs_v1.tar.gz"
+    sha256 = "18319651fe2fd75e10b6a4b139083e07fb1ed39e5548c13de25bb007447f4359"
+
+[atlas_les_inputs_rf10_era5_v1]
+git-tree-sha1 = "b3d5f9d0f44f2d7a63315ac29d4e4aeded8a9373"
+lazy = true
+
+    [[atlas_les_inputs_rf10_era5_v1.download]]
+    url = "https://github.com/jbphyswx/SOCRATESSingleColumnForcings.jl/releases/download/data-v1/atlas_les_inputs_rf10_era5_v1.tar.gz"
+    sha256 = "591bbe72bd0c88612a43c24f0e3517ef9c81107d5bbac29bde6d5d4dba0f8348"
+
+[atlas_les_inputs_rf11_era5_v1]
+git-tree-sha1 = "ea4635f7e12f4304ab811baf27aa75aaf7d7478c"
+lazy = true
+
+    [[atlas_les_inputs_rf11_era5_v1.download]]
+    url = "https://github.com/jbphyswx/SOCRATESSingleColumnForcings.jl/releases/download/data-v1/atlas_les_inputs_rf11_era5_v1.tar.gz"
+    sha256 = "8aca01c4e2346d57bc4de5b8951f6c849eb4907fb580718036b6752f2ecf7bcd"
+
+[atlas_les_inputs_rf12_obs_v1]
+git-tree-sha1 = "b5c86ceac3c772014d29d5fd45ee7510cc0ed38b"
+lazy = true
+
+    [[atlas_les_inputs_rf12_obs_v1.download]]
+    url = "https://github.com/jbphyswx/SOCRATESSingleColumnForcings.jl/releases/download/data-v1/atlas_les_inputs_rf12_obs_v1.tar.gz"
+    sha256 = "d6e2b825709b67a36e7a71d925c4bd3039cd911ca3a681d2686c7a366d945183"
+
+[atlas_les_inputs_rf12_era5_v1]
+git-tree-sha1 = "d021bfc69feae55a8cfac2fbf70ba4154e64e7b7"
+lazy = true
+
+    [[atlas_les_inputs_rf12_era5_v1.download]]
+    url = "https://github.com/jbphyswx/SOCRATESSingleColumnForcings.jl/releases/download/data-v1/atlas_les_inputs_rf12_era5_v1.tar.gz"
+    sha256 = "cf2256841f30e3830defc39d448f5a8526e51241bfa368b0a27319226e5dff9d"
+
+[atlas_les_inputs_rf13_obs_v1]
+git-tree-sha1 = "cc4bbb27742dfc61ba67f04ed107b11be5adce2d"
+lazy = true
+
+    [[atlas_les_inputs_rf13_obs_v1.download]]
+    url = "https://github.com/jbphyswx/SOCRATESSingleColumnForcings.jl/releases/download/data-v1/atlas_les_inputs_rf13_obs_v1.tar.gz"
+    sha256 = "c147f8f0bed99e3ab116d2b084cefde388d408f6fbfed1392bfdf34c84e87f0d"
+
+[atlas_les_inputs_rf13_era5_v1]
+git-tree-sha1 = "7329dcb2f48af84d0da06c6217c2380464c053a6"
+lazy = true
+
+    [[atlas_les_inputs_rf13_era5_v1.download]]
+    url = "https://github.com/jbphyswx/SOCRATESSingleColumnForcings.jl/releases/download/data-v1/atlas_les_inputs_rf13_era5_v1.tar.gz"
+    sha256 = "3ecbb73d0807766b509d301293054441410b5d93bfca71e7e1797db7590e7e7b"
+
+[atlas_les_outputs_rf01_obs_v1]
+git-tree-sha1 = "e2680a14131fd10137bdbe59b18e79c809fcdf4f"
+lazy = true
+
+    [[atlas_les_outputs_rf01_obs_v1.download]]
+    url = "https://github.com/jbphyswx/SOCRATESSingleColumnForcings.jl/releases/download/data-v1/atlas_les_outputs_rf01_obs_v1.tar.gz"
+    sha256 = "993429b37bbfe18713168d188eaf0218205869a7f783f46ca491df73203a5f09"
+
+[atlas_les_outputs_rf01_era5_v1]
+git-tree-sha1 = "2ffa1346b6fc59588e55391078599ef9ea1b2e2c"
+lazy = true
+
+    [[atlas_les_outputs_rf01_era5_v1.download]]
+    url = "https://github.com/jbphyswx/SOCRATESSingleColumnForcings.jl/releases/download/data-v1/atlas_les_outputs_rf01_era5_v1.tar.gz"
+    sha256 = "445d9c05a6af52864f3b55ecec5f4490c987cfae75fcd034725f3f19087fb133"
+
+[atlas_les_outputs_rf09_obs_v1]
+git-tree-sha1 = "cf89c2a3ec57e383abdca7d9168c6e02c9955653"
+lazy = true
+
+    [[atlas_les_outputs_rf09_obs_v1.download]]
+    url = "https://github.com/jbphyswx/SOCRATESSingleColumnForcings.jl/releases/download/data-v1/atlas_les_outputs_rf09_obs_v1.tar.gz"
+    sha256 = "78fdb65274e208f03bf82de07e08bd1300ddf0d1db1240d1fb1819f7a7ed0742"
+
+[atlas_les_outputs_rf09_era5_v1]
+git-tree-sha1 = "bff5e3196b3ccf35b16cb8631f5bb6f329ff24a8"
+lazy = true
+
+    [[atlas_les_outputs_rf09_era5_v1.download]]
+    url = "https://github.com/jbphyswx/SOCRATESSingleColumnForcings.jl/releases/download/data-v1/atlas_les_outputs_rf09_era5_v1.tar.gz"
+    sha256 = "8acc1bd46ff09be30184dc78e05472a5131b87701ca58df9830a84bbd8d568c3"
+
+[atlas_les_outputs_rf10_obs_v1]
+git-tree-sha1 = "c4302d3530a853228052b2618a68907129aea02c"
+lazy = true
+
+    [[atlas_les_outputs_rf10_obs_v1.download]]
+    url = "https://github.com/jbphyswx/SOCRATESSingleColumnForcings.jl/releases/download/data-v1/atlas_les_outputs_rf10_obs_v1.tar.gz"
+    sha256 = "ac6ec4f9ae5b70547368fa03cd014bb01f50c830b86c663e3f51337cda9303e6"
+
+[atlas_les_outputs_rf10_era5_v1]
+git-tree-sha1 = "18e0c77167e6b8f2f8d07941dd14a7502d8c06e6"
+lazy = true
+
+    [[atlas_les_outputs_rf10_era5_v1.download]]
+    url = "https://github.com/jbphyswx/SOCRATESSingleColumnForcings.jl/releases/download/data-v1/atlas_les_outputs_rf10_era5_v1.tar.gz"
+    sha256 = "887e828cad4552de507d198214c6863289347245e86ae4dfcb62b4a061cedd9c"
+
+[atlas_les_outputs_rf11_era5_v1]
+git-tree-sha1 = "b76fe0cb60ffeda5713389b7b67eeb517fd9423c"
+lazy = true
+
+    [[atlas_les_outputs_rf11_era5_v1.download]]
+    url = "https://github.com/jbphyswx/SOCRATESSingleColumnForcings.jl/releases/download/data-v1/atlas_les_outputs_rf11_era5_v1.tar.gz"
+    sha256 = "fbae32ce613676edc978a5f825aa082e1ec7c28e3ecb8be0f4d5516285477011"
+
+[atlas_les_outputs_rf12_obs_v1]
+git-tree-sha1 = "6e410a1b17e28a9263c4aff28030c49c2dc75e75"
+lazy = true
+
+    [[atlas_les_outputs_rf12_obs_v1.download]]
+    url = "https://github.com/jbphyswx/SOCRATESSingleColumnForcings.jl/releases/download/data-v1/atlas_les_outputs_rf12_obs_v1.tar.gz"
+    sha256 = "96429914eb35479ff4a88cb8cf9bb0d9218cd6c42a0e0f385fd2004adaa3e14f"
+
+[atlas_les_outputs_rf12_era5_v1]
+git-tree-sha1 = "f25638c1f0fcd458483542900321bec22f753a65"
+lazy = true
+
+    [[atlas_les_outputs_rf12_era5_v1.download]]
+    url = "https://github.com/jbphyswx/SOCRATESSingleColumnForcings.jl/releases/download/data-v1/atlas_les_outputs_rf12_era5_v1.tar.gz"
+    sha256 = "b527cdbd28468f84051df424a8b0ea53a94176e9ce903a7f9b8a9feb677d5511"
+
+[atlas_les_outputs_rf13_obs_v1]
+git-tree-sha1 = "0fcc67fa56c78ca03e419e144e8323ebac085f76"
+lazy = true
+
+    [[atlas_les_outputs_rf13_obs_v1.download]]
+    url = "https://github.com/jbphyswx/SOCRATESSingleColumnForcings.jl/releases/download/data-v1/atlas_les_outputs_rf13_obs_v1.tar.gz"
+    sha256 = "80641115ebc68b6c6f3f785711329ba6c2b53427249b2966a8e634e18d579cf4"
+
+[atlas_les_outputs_rf13_era5_v1]
+git-tree-sha1 = "ac8eff1fa4b15e499f2db6a7038b1e4772a36600"
+lazy = true
+
+    [[atlas_les_outputs_rf13_era5_v1.download]]
+    url = "https://github.com/jbphyswx/SOCRATESSingleColumnForcings.jl/releases/download/data-v1/atlas_les_outputs_rf13_era5_v1.tar.gz"
+    sha256 = "9a08da57955dd482f52178d525ebc28b9e59c73c2cdf7ea528d7e2edb0a80ab6"
+

@@ -11,6 +11,7 @@ using NCDatasets: NCDatasets as NC
 using NCDatasets: NCDatasets
 using Artifacts: Artifacts
 using Pkg: Pkg
+using LazyArtifacts: LazyArtifacts  # enables lazy (download-on-first-use) resolution of the declared Artifacts.toml artifacts
 using DelimitedFiles: DelimitedFiles
 using Statistics: Statistics
 using LinearAlgebra: LinearAlgebra
