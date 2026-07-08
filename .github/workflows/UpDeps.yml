@@ -19,15 +19,16 @@ jobs:
       with:
         access_token: ${{ github.token }}
 
-    - uses: actions/checkout@v2.2.0
+    - uses: actions/checkout@v4
 
-    - uses: julia-actions/setup-julia@latest
+    - uses: julia-actions/setup-julia@v2
       with:
-        version: 1.12
+        version: '1.12'
 
     - name: Apply UpDeps
       run: |
-        julia --project .dev/up_deps.jl .
+        julia --project=.dev -e 'using Pkg; Pkg.instantiate()'
+        julia --project=.dev .dev/up_deps.jl .
 
     - name: Check Manifest diff
       run: |
