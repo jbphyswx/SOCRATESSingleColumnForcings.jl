@@ -5,8 +5,7 @@ SOCRATES/Atlas LES forcing files are distributed separately from this repository
 ## Download entry points
 
 ```julia
-using SOCRATESSingleColumnForcings
-const SSCF = SOCRATESSingleColumnForcings
+using SOCRATESSingleColumnForcings: SOCRATESSingleColumnForcings as SSCF
 
 # Atlas SAM *input* files (forcing NetCDF + vertical grid text)
 SSCF.download_atlas_les_inputs(

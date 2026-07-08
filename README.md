@@ -48,18 +48,15 @@ Load an extension by `using` its weak dependency in the same session, e.g. `usin
 ## Quick start
 
 ```julia
-using SOCRATESSingleColumnForcings
-const SSCF = SOCRATESSingleColumnForcings
+using SOCRATESSingleColumnForcings: SOCRATESSingleColumnForcings as SSCF
 
 # 1. Download data (once per flight; stored as Julia artifacts)
 SSCF.download_atlas_les_inputs(flight_numbers = [9])
 SSCF.download_atlas_les_outputs(flight_numbers = [9])
 
 # 2. Build column forcing on the default Atlas vertical grid
-using Thermodynamics
-using ClimaParams
-const CP = ClimaParams
-const TD = Thermodynamics
+using Thermodynamics: Thermodynamics as TD
+using ClimaParams: ClimaParams as CP
 FT = Float32
 tp = TD.Parameters.ThermodynamicsParameters(CP.create_toml_dict(FT))
 

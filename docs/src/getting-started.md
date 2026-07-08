@@ -24,8 +24,7 @@ Julia ≥ 1.10 is required.
 Atlas LES input and output files are stored as Julia artifacts (see [data-and-artifacts.md](data-and-artifacts.md)).
 
 ```julia
-using SOCRATESSingleColumnForcings
-const SSCF = SOCRATESSingleColumnForcings
+using SOCRATESSingleColumnForcings: SOCRATESSingleColumnForcings as SSCF
 
 # Input forcing files (obs-based and/or ERA5-based)
 SSCF.download_atlas_les_inputs(flight_numbers = [9], forcing_types = (:obs_data,))
@@ -49,10 +48,8 @@ Equilibrium-derived quantities (`H_nudge`, saturation-adjusted `T`, condensate-a
 **Accurate path** (recommended for production / TurbulenceConvection):
 
 ```julia
-using Thermodynamics
-using ClimaParams
-const TD = Thermodynamics
-const CP = ClimaParams
+using Thermodynamics: Thermodynamics as TD
+using ClimaParams: ClimaParams as CP
 FT = Float32
 tp = TD.Parameters.ThermodynamicsParameters(CP.create_toml_dict(FT))
 ```

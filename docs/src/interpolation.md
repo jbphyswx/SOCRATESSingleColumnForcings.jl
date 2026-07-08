@@ -127,16 +127,15 @@ Conservative regridding is opt-in via `conservative_interp = true` in `get_colum
 ## Building and evaluating manually
 
 ```julia
-const Interp = SSCF.Interpolation
 
-xp = Interp.coerce_vector(Tuple{Interp.UniformRange, Float32}, collect(0.0f0:300.0f0:9600.0f0))
-fp = Interp.coerce_vector(Tuple{Vector, Float32}, rand(Float32, length(xp)))
+xp = SSCF.Interpolation.coerce_vector(Tuple{SSCF.Interpolation.UniformRange, Float32}, collect(0.0f0:300.0f0:9600.0f0))
+fp = SSCF.Interpolation.coerce_vector(Tuple{Vector, Float32}, rand(Float32, length(xp)))
 
-itp = Interp.Fast1DLinearInterpolant(xp, fp; bc = Interp.ExtrapolateBoundaryCondition())
+itp = SSCF.Interpolation.Fast1DLinearInterpolant(xp, fp; bc = SSCF.Interpolation.ExtrapolateBoundaryCondition())
 itp(450.0f0)
 
 # Vectorized
-Interp.interpolate_1d(query_times, xp, fp, Interp.FastLinear1DInterpolation)
+SSCF.Interpolation.interpolate_1d(query_times, xp, fp, SSCF.Interpolation.FastLinear1DInterpolation)
 ```
 
 ## Performance notes

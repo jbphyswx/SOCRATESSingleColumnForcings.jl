@@ -13,7 +13,7 @@ using SOCRATESSingleColumnForcings: SOCRATESSingleColumnForcings as SSCF
         Test.@test @allocated(ss(2.5)) == 0
     do not allocate, but the field accesses inside the interpolant do seem to allocate a 16 byte single allocation on 1.11
     This form does not allocate, and we believe this shows it is only a global context lowering problem
-    (also defining the interpolants su, si, ss as cosnts would fix, let block does not either, etc...)
+    (also defining the interpolants su, si, ss as consts would fix, let block does not either, etc...)
 =#
 function allocation_test(itp, x) # https://discourse.julialang.org/t/allocations-on-field-access-even-though-no-abstract-types-are-involved/126672/6
     @allocated itp(x)

@@ -15,8 +15,7 @@ Given a SOCRATES flight number and a forcing source (`ObsForcing()` or `ERA5Forc
 ## Quick example
 
 ```julia
-using SOCRATESSingleColumnForcings
-const SSCF = SOCRATESSingleColumnForcings
+using SOCRATESSingleColumnForcings: SOCRATESSingleColumnForcings as SSCF
 
 SSCF.download_atlas_les_inputs(flight_numbers = [9])
 SSCF.download_atlas_les_outputs(flight_numbers = [9])
