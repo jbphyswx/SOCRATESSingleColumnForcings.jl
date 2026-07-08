@@ -1,3 +1,10 @@
+"""
+    SOCRATESSingleColumnForcings
+
+Build single-column forcings from SOCRATES/Atlas LES datasets for the CliMA EDMF
+single-column model. Main entry point: [`get_column_forcing`](@ref). Interpolation
+primitives live in the nested [`Interpolation`](@ref) submodule (qualified calls only).
+"""
 module SOCRATESSingleColumnForcings
 
 using NCDatasets: NCDatasets as NC  
@@ -35,12 +42,20 @@ A SOCRATES forcing source, encoded as a singleton type so behavior is selected b
 (observation-based) and [`ERA5Forcing`](@ref) (ERA5-reanalysis-based).
 """
 abstract type AbstractForcingType end
+
+"""Observation-based Atlas SAM forcing source."""
 struct ObsForcing <: AbstractForcingType end
+
+"""ERA5-based Atlas SAM forcing source."""
 struct ERA5Forcing <: AbstractForcingType end
 
+"""Supported singleton forcing sources for iteration (`ObsForcing()`, `ERA5Forcing()`)."""
 const forcing_types = (ObsForcing(), ERA5Forcing())
 
-# label symbol (kept for API compatibility)
+"""Supported SOCRATES flight numbers `(1, 9, 10, 11, 12, 13)`."""
+const flight_numbers = (1, 9, 10, 11, 12, 13)
+
+"""Short label for a forcing source: `:Obs` or `:ERA5`."""
 symbol(::ObsForcing) = :Obs
 symbol(::ERA5Forcing) = :ERA5
 
@@ -53,7 +68,7 @@ distinct from the `:Obs` / `:ERA5` label returned by [`symbol`](@ref).
 forcing_key(::ObsForcing) = :obs_data
 forcing_key(::ERA5Forcing) = :ERA5_data
 
-const flight_numbers = (1, 9, 10, 11, 12, 13)
+"""Whether `flight_number` is valid for the given forcing source."""
 @inline is_valid_flight_number(::ObsForcing, flight_number::Integer) = flight_number in (1, 9, 10, 12, 13)
 @inline is_valid_flight_number(::ERA5Forcing, flight_number::Integer) = flight_number in (1, 9, 10, 11, 12, 13)
 
@@ -64,6 +79,11 @@ const flight_numbers = (1, 9, 10, 11, 12, 13)
 # The other four cases have clouds extending through deeper boundary layers; they are run on a 320-level vertical grid.
 const grid_heights = Base.ImmutableDict(1 => 320, 9 => 320, 10 => 320, 11 => 320, 12 => 192, 13 => 192) # this might be slow idk..
 
+"""
+    grid_height(flight_number)
+
+Return the Atlas default vertical level count for `flight_number` (320 or 192).
+"""
 @inline function grid_height(flight_number::T) where {T <: Integer}
     if flight_number in (1, 9, 10, 11)
         return T(320)

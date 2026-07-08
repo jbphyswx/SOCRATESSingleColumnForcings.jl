@@ -4,9 +4,16 @@
 
 
 # Singleton BC types
+"""Supertype for out-of-range evaluation policies on 1D interpolants."""
 abstract type AbstractBoundaryCondition end
+
+"""Linear extrapolation outside the node range."""
 struct ExtrapolateBoundaryCondition <: AbstractBoundaryCondition end
+
+"""Error when evaluating outside the node range."""
 struct ErrorBoundaryCondition <: AbstractBoundaryCondition end
+
+"""Return the nearest endpoint value outside the node range."""
 struct NearestBoundaryCondition <: AbstractBoundaryCondition end
 
 
@@ -34,6 +41,12 @@ create_boundary_condition(::Val{:nearest}) = NearestBoundaryCondition()
 
 # public constructor alias: accepts a BC instance, Symbol, or String and funnels to
 # `create_boundary_condition`; an unknown Symbol/String hits the `Val{s}` error below.
+"""
+    create_bc(x)
+
+Create a boundary condition from a singleton instance, `Symbol`, or `String`
+(`:extrapolate`, `:error`, `:nearest`).
+"""
 create_bc(x) = create_boundary_condition(x)
 
 # fallback (dynamic, no extra functions)

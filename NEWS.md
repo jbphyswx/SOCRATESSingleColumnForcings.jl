@@ -1,5 +1,47 @@
 # NEWS
 
+## Unreleased
+
+Major source reorganization and performance-oriented interpolation storage. **Breaking** for code that called `process_case`, unqualified interpolation symbols, or paths under removed files.
+
+### Package layout
+
+- Split monolithic `helper_functions.jl`, `process_case.jl`, `les_reader_helper.jl`, and `interpolating_methods.jl` into focused modules: `forcings.jl`, `regrid.jl`, `netcdf_fields.jl`, `field_altitude.jl`, `ground_insertion.jl`, `array_utils.jl`, `thermodynamics.jl`, `les_reference_profiles.jl`.
+- Added self-contained `Interpolation` submodule (`src/interpolation/`). All interpolation calls are qualified (`Interpolation.foo`); nothing re-exported to the parent namespace.
+- Added package extensions for optional backends: Dierckx, Interpolations, PCHIP, NonNegLeastSquares, Thermodynamics.
+
+### Forcing API
+
+- **`get_column_forcing`** replaces `process_case`. Returns a `NamedTuple` keyed by requested `forcing_variables` (default: `supported_forcing_variables`).
+- Custom `forcing_variables` subsets with validation and lazy shared precompute.
+- Added `:T_nudge` output.
+- Surface helpers: `get_surface_reference_state`, `get_surface_conditions`.
+- Forcing source selected by type: `ObsForcing()`, `ERA5Forcing()`.
+
+### Interpolation
+
+- **`UniformRange`**: custom exactly-uniform axis with precomputed `inv_step` for fast linear eval.
+- **`Constant` / `ConstantVector`**: backing types for exactly-constant fields.
+- Storage specs `Tuple{Backing, Eltype}` on `get_column_forcing` for type-stable, allocation-free returns.
+- `drop_collinear_nodes` preserves per-array backing (`Vector`, `SVector`, uniform `AbstractRange`); errors instead of demoting ranges to `Vector`.
+- Conservative regridding consolidated in `interpolation/conservative.jl`.
+
+### I/O
+
+- `open_atlas_les_inputs.jl` / `open_atlas_les_outputs.jl`: aligned `Val` dispatch and explicit errors on missing files.
+- Artifact-backed downloads unchanged in workflow; see `docs/data-and-artifacts.md`.
+
+### Tests
+
+- New: `integration_forcings.jl`, `unit_regrid_source.jl`, `unit_thermodynamics.jl`, `allocations.jl`, `inferrability.jl`, `extensions.jl`, `quality.jl`.
+- Removed: `integration_process_case.jl`.
+
+### Documentation
+
+- Rewrote `README.md`.
+- Added Documenter.jl site (`docs/make.jl`, `docs/src/`, CI workflow `.github/workflows/docs.yml`).
+- User guides: getting started, forcings, interpolation, data/artifacts.
+
 ## v0.14.0
 
 This release is the breaking compatibility port for the modern SOCRATES / ClimaAtmos calibration stack.

@@ -4,13 +4,6 @@ _output_file_tag(::ERA5Forcing) = "ERA5"
 
 const _OUTPUT_FILE_SUFFIX = "_SOCRATES_128x128_100m_10s_rad10_vg_M2005_aj.nc"
 
-"""
-    open_atlas_les_output(flight_number, forcing_type; open_files=true, include_grid=true)
-
-Open the Atlas LES *output* dataset for `flight_number` and `forcing_type`, returning
-`(; data, grid_data)` — `data` is the opened `NCDataset` (the file path if `open_files=false`).
-With `include_grid=false`, returns `(; data)`.
-"""
 function _open_atlas_les_output(flight_number::Integer, forcing_type::AbstractForcingType, ::Val{open_files}, include_grid_val::Val{include_grid}) where {open_files, include_grid}
     artifact_dir = atlas_les_outputs_root(flight_number; forcing_types = (forcing_key(forcing_type),))
     atlas_dir = joinpath(artifact_dir, "Output_Data")
@@ -25,15 +18,17 @@ function _open_atlas_les_output(flight_number::Integer, forcing_type::AbstractFo
     return (; data, grid_data)
 end
 
-@inline open_atlas_les_output(flight_number::Integer, forcing_type::AbstractForcingType; open_files::Bool = true, include_grid::Bool = true) =
-    _open_atlas_les_output(flight_number, forcing_type, Val(open_files), Val(include_grid))
-
-
 """
-    open_atlas_les_output(flight_number; open_files=true, include_grid=true)
+    open_atlas_les_output(flight_number, forcing_type; open_files=true, include_grid=true)
 
-Convenience multi-source load: returns `(; obs_data, ERA5_data, grid_data)`.
+Open the Atlas LES *output* dataset for `flight_number` and `forcing_type`, returning
+`(; data, grid_data)` — `data` is the opened `NCDataset` (the file path if `open_files=false`).
+With `include_grid=false`, returns `(; data)`.
 """
+function open_atlas_les_output(flight_number::Integer, forcing_type::AbstractForcingType; open_files::Bool = true, include_grid::Bool = true)
+    return _open_atlas_les_output(flight_number, forcing_type, Val(open_files), Val(include_grid))
+end
+
 function _open_atlas_les_output(flight_number::Integer, open_files_val::Val{open_files}, include_grid_val::Val{include_grid}) where {open_files, include_grid}
     obs_data = _open_atlas_les_output(flight_number, ObsForcing(), open_files_val, Val(false)).data
     ERA5_data = _open_atlas_les_output(flight_number, ERA5Forcing(), open_files_val, Val(false)).data
@@ -44,7 +39,11 @@ function _open_atlas_les_output(flight_number::Integer, open_files_val::Val{open
     return (; obs_data, ERA5_data, grid_data)
 end
 
+"""
+    open_atlas_les_output(flight_number; open_files=true, include_grid=true)
 
-@inline open_atlas_les_output(flight_number::Integer; open_files::Bool = true, include_grid::Bool = true) =
-    _open_atlas_les_output(flight_number, Val(open_files), Val(include_grid))
-
+Convenience multi-source load: returns `(; obs_data, ERA5_data, grid_data)`.
+"""
+function open_atlas_les_output(flight_number::Integer; open_files::Bool = true, include_grid::Bool = true)
+    return _open_atlas_les_output(flight_number, Val(open_files), Val(include_grid))
+end

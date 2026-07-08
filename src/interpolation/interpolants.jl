@@ -9,8 +9,10 @@ module.
 =#
 
 # --- interpolation method + interpolant supertypes ------------------------------------------ #
+"""Supertype for 1D interpolation method singletons (e.g. [`FastLinear1DInterpolation`](@ref))."""
 abstract type AbstractInterpolationMethod end
 
+"""Supertype for built 1D interpolants (e.g. [`Fast1DLinearInterpolant`](@ref))."""
 abstract type AbstractInterpolant end
 
 # --- interval search ------------------------------------------------------------------------ #
@@ -54,6 +56,13 @@ create_svector(x::AbstractVector{FT}) where {FT} = StaticArrays.SVector{length(x
 @inline _resolve_eltype(::Type{Nothing}, v::AbstractVector) = Base.eltype(v)
 @inline _resolve_eltype(::Type{FT}, ::AbstractVector) where {FT} = FT
 
+"""
+    coerce_vector(spec, v)
+
+Coerce vector `v` into the backing and element type requested by `spec::Type{Tuple{Backing, Eltype}}`.
+Either knob may be `Nothing` for passthrough on that axis. Used by [`build_spline`](@ref) and
+[`get_column_forcing`](@ref) storage specs.
+"""
 coerce_vector(::Type{Tuple{B, E}}, v::AbstractVector) where {B, E} = _coerce_storage(B, E, v)
 
 _coerce_storage(::Type{Nothing}, ::Type{E}, v::AbstractVector) where {E} =
@@ -92,7 +101,10 @@ function _coerce_uniform_range(::Type{T}, v::AbstractRange{FT}, check_values::Bo
 end
 
 # --- fast linear interpolation method ------------------------------------------------------- #
+"""Piecewise-linear 1D interpolation method (fast path)."""
 struct FastLinear1DInterpolationMethod <: AbstractInterpolationMethod end
+
+"""Default piecewise-linear interpolation method instance."""
 const FastLinear1DInterpolation = FastLinear1DInterpolationMethod()
 
 # Core scalar evaluation. `asc` is derived from the stored nodes so ascending and descending grids share
@@ -414,7 +426,8 @@ end
 # =============================== #
 # =============================== #
 
-struct Constant{T} <: AbstractVector{T}  # lenghtless (elide boundschecking)
+"""Single-value `AbstractVector` backing for exactly-constant fields."""
+struct Constant{T} <: AbstractVector{T}  # length-1 backing (elide boundschecking)
     value::T
 end
 Base.IndexStyle(::Type{<:Constant}) = IndexLinear()
@@ -436,6 +449,11 @@ function _coerce_storage(::Type{Constant}, ::Type{E}, v::AbstractVector) where {
     return Constant{T}(T(v[1]))
 end
 
+"""
+    ConstantVector(value)
+
+Length-`N` backing where every element equals `value` (for exactly-constant fields).
+"""
 struct ConstantVector{T, N <: Integer} <: AbstractVector{T}
     value::T
 end
@@ -461,7 +479,13 @@ end
 # ============================================================================================================================================= #
 
 # Build the interpolant for `FastLinear1DInterpolationMethod`. Backing/eltype-preserving (stores what it's
-# given); the caller controls storage via `coerce_vector` upstream.
+# given); the caller controls storage via [`coerce_vector`](@ref) upstream.
+"""
+    build_spline(method, xp, fp; bc = ErrorBoundaryCondition(), drop_collinear = true)
+
+Build a 1D interpolant for `method` on nodes `(xp, fp)`. Default method is
+[`FastLinear1DInterpolation`](@ref).
+"""
 function build_spline(
     ::FastLinear1DInterpolationMethod,
     xp::AbstractVector,
@@ -475,6 +499,11 @@ end
 # --------------------------------------------------------------------------------------------------------------------------------------------- #
 
 # Build the interpolant for `method` and evaluate it at `x`.
+"""
+    interpolate_1d(x, xp, fp, method = FastLinear1DInterpolation; bc = ErrorBoundaryCondition())
+
+Build a spline from `(xp, fp)` and evaluate at `x` (scalar or array).
+"""
 function interpolate_1d(
     x,
     xp,
@@ -523,7 +552,7 @@ family — `Vector -> Vector`, `SVector{N} -> SVector{keep}` (isbits kept) — s
 forces the other's (fixing the old coupling that demoted both to `Vector` for any mismatched pair). The
 collinearity keep-mask depends on BOTH `x` and `y`, so it is threaded into each per-array prune. A range
 (`AbstractRange`) coordinate cannot represent an irregular pruned node set: it is rebuilt via
-[`_coerce_uniform_range`](@ref), which returns a range when the kept nodes remain exactly uniform (e.g.
+`_coerce_uniform_range`, which returns a range when the kept nodes remain exactly uniform (e.g.
 only the endpoints survive) and errors otherwise — the honest boundary instead of a silent demotion to
 an allocating `Vector`.
 """
@@ -615,6 +644,11 @@ function drop_collinear_nodes(itp::Fast1DLinearInterpolant)
 end
 
 
+"""
+    coerce_to_shared_nodes(itp_collection)
+
+Re-evaluate a collection of [`Fast1DLinearInterpolant`](@ref)s on a shared sorted node set.
+"""
 function coerce_to_shared_nodes(itp_collection)
     error("Not implemented")
 end

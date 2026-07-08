@@ -62,9 +62,8 @@ end
 """
     get_SSCF_surface_reference_state!(q_tot, flight_number, forcing_type; thermodynamics_backend)
 
-Surface reference state at the reference timestep, `(; pg, Tg, q_tot)` scalars. `q_tot` is the
-caller-supplied scratch vertical-profile buffer (in-place fast path). When SST > Tg the SST sets the
-surface moisture (a source); otherwise the ambient RH controls it (extrapolated to the surface).
+In-place surface reference state at the reference timestep, `(; pg, Tg, q_tot_g)` scalars.
+`q_tot` is caller-supplied scratch for the vertical profile buffer.
 """
 get_SSCF_surface_reference_state!(
     q_tot::AbstractArray,
@@ -74,10 +73,10 @@ get_SSCF_surface_reference_state!(
 ) = _surface_reference_state!(q_tot, _surface_setup(flight_number, forcing_type), thermodynamics_backend)
 
 """
-    get_SSCF_surface_reference_state(flight_number, forcing_type, FT = Float64; thermodynamics_backend)
+    get_surface_reference_state(flight_number, forcing_type, FT = Float64; thermodynamics_backend)
 
-Allocating convenience: loads the dataset once, sizes the scratch profile buffer, and forwards to
-the in-place worker.
+Allocating surface reference state at the reference timestep: `(; pg, Tg, q_tot_g)` scalars.
+Loads the dataset once and forwards to [`get_SSCF_surface_reference_state!`](@ref).
 """
 function get_surface_reference_state(
     flight_number::Integer,
@@ -94,10 +93,10 @@ end
 
 
 """
-    get_SSCF_surface_conditions(flight_number, forcing_type; thermodynamics_backend)
+    get_surface_conditions(flight_number, forcing_type; thermodynamics_backend)
 
-Time-dependent surface conditions from the reference timestep onward, each returned as a
-built (alloc-free-evaluating) time interpolant: `(; pg, Tg, Tsfc, qg, qsfc)`.
+Time-dependent surface conditions from the reference timestep onward. Returns
+`(; pg, Tg, Tsfc, qg, qsfc)` — each field a built time interpolant (extrapolating BC).
 """
 function get_surface_conditions(
     flight_number::Integer,
@@ -145,6 +144,12 @@ end
 # Add an output by listing its `:symbol` here and defining `compute(::Val{:symbol}, base, tb)` (and,
 # if it deviates from the defaults, `output_source` / `output_interp_kwargs` / `output_positive`).
 # `base` is the shared column precompute NamedTuple (data, dims, T/p/q, pg/Tg/qg, ρ, ground_indices, FT).
+"""
+    supported_forcing_variables
+
+Tuple of symbols [`get_column_forcing`](@ref) can produce. A caller's `forcing_variables`
+argument must be a subset. See the user guide for field descriptions.
+"""
 const supported_forcing_variables =
     (:dTdt_hadv, :H_nudge, :T_nudge, :dqtdt_hadv, :qt_nudge, :subsidence, :u_nudge, :v_nudge, :ug_nudge, :vg_nudge, :dTdt_rad)
 
@@ -193,35 +198,42 @@ _itp_value_eltype(::Type{Tuple{CT,VT}}) where {CT,VT} = VT
 _itp_coord_eltype(::Type{Tuple{CT,VT}}) where {CT,VT} = CT
 
 
-
 """
     get_column_forcing(
-        flight_number::Integer,
-        forcing_type::AbstractForcingType,
-        forcing_variables::NTuple{N,Symbol} = supported_forcing_variables,
-        ::Type{FT} = Float64,
-        ::Type{interpolant_fieldtype} = Vector;   # node/value backing for built interpolants (Vector, SVector, ...)
+        flight_number,
+        forcing_type,
+        forcing_variables = supported_forcing_variables,
+        interpolant_coord_types = Tuple{StepRangeLen, Nothing},
+        interpolant_value_types = Tuple{Vector, Float64},
+        FT = _itp_value_eltype(interpolant_value_types);
         new_z = nothing,
-        initial_condition::Bool = false,
+        initial_condition = false,
         thermodynamics_backend = DefaultThermodynamicsBackend(),
-        use_LES_output_for_z::Bool = false,
-        return_old_z::Bool = false,
-        fail_on_missing_data::Bool = true,
-        conservative_interp::Bool = false,
-        conservative_interp_kwargs = default_conservative_interp_kwargs,
-        drop_collinear::Val = Val(false),
+        use_LES_output_for_z = false,
+        return_old_z = false,
+        fail_on_missing_data = true,
+        conservative_interp = false,
+        conservative_interp_kwargs = Interpolation.default_conservative_interp_kwargs,
+        drop_collinear = Val(false),
+        A_cache = Dict{DataType, Matrix{FT}}(),
+        Af_cache = Dict{DataType, LinearAlgebra.Factorization{FT}}(),
     )
 
-Build the column forcing for a SOCRATES flight/`forcing_type` (`ObsForcing()` / `ERA5Forcing()`).
+Build column forcing for a SOCRATES flight and [`AbstractForcingType`](@ref) (`ObsForcing()` / `ERA5Forcing()`).
 
-Returns a `NamedTuple` keyed by `forcing_variables` (default [`supported_forcing_variables`](@ref)); each
-value is a per-`z` vector of time-interpolants. If `new_z === nothing` the Atlas default grid is used. When
-`initial_condition` is true the fields are the time-0 profiles instead of time-splines. `return_old_z`
-returns the source altitude field instead of forcing. Equilibrium-derived quantities come from
-`thermodynamics_backend` (naive fallback by default; pass a `ThermodynamicsParameters` for the accurate path).
-Some fields (winds, subsidence, geostrophic) are always ERA5-forced; the rest follow `forcing_type`.
+Returns a `NamedTuple` keyed by `forcing_variables` (default [`supported_forcing_variables`](@ref)).
+Each value is a `Vector` of time interpolants (one per vertical level on `new_z`), unless
+`initial_condition = true` (time-0 profiles) or `return_old_z = true` (source altitude field).
+
+Storage type parameters `interpolant_coord_types` and `interpolant_value_types` are
+`Tuple{Backing, Eltype}` specs passed to [`Interpolation.coerce_vector`](@ref); the value
+spec eltype sets the working float type `FT`.
+
+Winds, subsidence, and geostrophic fields are always ERA5-sourced; nudging targets and
+advective tendencies follow `forcing_type`. Equilibrium-derived quantities use
+`thermodynamics_backend` (default [`DefaultThermodynamicsBackend`](@ref); pass
+`ThermodynamicsParameters` with `Thermodynamics.jl` loaded for accurate physics).
 """
-
 function get_column_forcing(
     flight_number::FNT,
     forcing_type::AbstractForcingType,
@@ -492,7 +504,6 @@ function get_column_forcing(
 
 end
 
-
 # Subsidence (full-grid, prior to vertical regridding) from omega and the surface pressure tendency,
 # using the Atlas scaled-sigmoid weighting `f_p` that passes through (ps, 1) and (25000 Pa, 0). `ρ` is
 # the full-grid air density and `p_full` the full-grid pressure; both are supplied by the caller.
@@ -549,6 +560,11 @@ function _column_subsidence(
     # subsidence[subsidence .> m] .= m # stability test -- can we tolerate any ascent?
 end
 
+"""
+    default_new_z(flight_number)
+
+Return the Atlas default vertical grid vector for `flight_number` (from `open_atlas_les_grid`).
+"""
 function default_new_z(flight_number::Int;)
     data = open_atlas_les_grid(flight_number)
     new_z = data[:grid_data]

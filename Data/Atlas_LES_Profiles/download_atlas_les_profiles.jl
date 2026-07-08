@@ -80,6 +80,12 @@ function _required_output_files(flight::Int, forcing_types)
     return req
 end
 
+"""
+    atlas_les_inputs_root(flight; forcing_types = (:obs_data,), ...)
+
+Return the artifact directory for flight `flight` input files, downloading and
+registering artifacts if required files are missing.
+"""
 function atlas_les_inputs_root(
     flight::Int;
     forcing_types::Union{AbstractArray{Symbol}, Tuple{Vararg{Symbol}}} = (:obs_data,),
@@ -157,6 +163,12 @@ function atlas_les_inputs_root(
     return Artifacts.artifact_path(new_hash)
 end
 
+"""
+    atlas_les_outputs_root(flight; forcing_types = (:obs_data, :ERA5_data), ...)
+
+Return the artifact directory for flight `flight` LES output files, downloading and
+registering artifacts if required files are missing.
+"""
 function atlas_les_outputs_root(
     flight::Int;
     forcing_types::Union{AbstractArray{Symbol}, Tuple{Vararg{Symbol}}} = (:obs_data, :ERA5_data),
@@ -356,8 +368,9 @@ const SOCRATES_LES_outputs_Box_links = Dict{String, String}( # We have to save e
 
 
 """
-    download_atlas_les_inputs(; flight_numbers::AbstractArray{Int} = flight_numbers, forcing_type::Symbol = :obs_data, SOCRATES_LES_inputs_Box_links::Dict{String, String} = SOCRATES_LES_inputs_Box_links)
+    download_atlas_les_inputs(; flight_numbers = flight_numbers, forcing_types = (:obs_data,), ...)
 
+Download Atlas LES *input* forcing files and register them as Julia artifacts.
 """
 function download_atlas_les_inputs(;
     flight_numbers::Union{AbstractArray{Int}, Tuple{Vararg{Int}}} = flight_numbers,
@@ -380,12 +393,10 @@ end
 
 
 """
-    download_atlas_les_profiles(; flight_numbers::AbstractArray{Int} = flight_numbers, forcing_types::AbstractArray{Symbol} = [:obs_data, :ERA5_data], SOCRATES_LES_inputs_Box_links::Dict{String, String} = SOCRATES_LES_inputs_Box_links, SOCRATES_LES_outputs_Box_links::Dict{String, String} = SOCRATES_LES_outputs_Box_links)
+    download_atlas_les_outputs(; flight_numbers = flight_numbers, forcing_types = (:obs_data, :ERA5_data), ...)
 
-    These all have the same fiilename so we have to manually append the flight number to the filename
-
+Download Atlas LES *output* files and register them as Julia artifacts.
 """
-
 function download_atlas_les_outputs(;
     flight_numbers::Union{AbstractArray{Int}, Tuple{Vararg{Int}}} = flight_numbers,
     forcing_types::Union{AbstractArray{Symbol}, Tuple{Vararg{Symbol}}} = (:obs_data, :ERA5_data),

@@ -3,13 +3,14 @@ Interpolation submodule for SOCRATESSingleColumnForcings.
 
 Public surface is reached through qualified calls: `Interpolation.foo` from package source and
 `SSCF.Interpolation.foo` from extensions (no names are exported into the parent namespace).
-
-Package-source callers use `Interpolation.<name>`; extensions extend/subtype
-`SSCF.Interpolation.<name>` (e.g. `build_spline`, `AbstractInterpolationMethod`, `nnls_solve`).
-
-Include order matters: boundary-condition types first, then the interpolants that reference them,
-then the conservative helpers that use `build_spline`/`safe_integrate`.
 =#
+"""
+    Interpolation
+
+Self-contained 1D interpolation, node coercion, collinear pruning, and conservative regridding.
+Call as `SOCRATESSingleColumnForcings.Interpolation.foo` — symbols are not re-exported to the
+parent module.
+"""
 module Interpolation
 
 using LinearAlgebra: LinearAlgebra

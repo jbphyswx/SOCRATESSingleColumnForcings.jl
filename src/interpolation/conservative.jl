@@ -73,6 +73,13 @@ This probably also explains why :pivot was the default in the original code.
 Note if you're doing fully random matrices for A, :pivot was slower, but then that's not really a realistic representation of what the workflow would be for regridding input variables like this where A is sparse and has a real structure from the grid.
 =#
 
+"""
+    default_conservative_interp_kwargs
+
+Default keyword bundle for conservative vertical regridding (`preserve_monotonicity`,
+`enforce_positivity`, `nnls_alg`, etc.). Merge with overrides via
+[`get_conservative_interp_kwargs`](@ref).
+"""
 const default_conservative_interp_kwargs = (;
     preserve_monotonicity = true,
     enforce_positivity = false,
@@ -101,21 +108,19 @@ get_conservative_interp_kwargs(conservative_interp_kwargs::Dict) = get_conservat
 get_conservative_interp_kwargs(conservative_interp_kwargs::DCIKT) =
     merge(default_conservative_interp_kwargs, conservative_interp_kwargs) # merge between two DCIKTs (should maybe be faster than the iterative method above)
 
+"""
+    get_conservative_interp_kwargs(kwargs...)
+
+Normalize user conservative-regrid kwargs against [`default_conservative_interp_kwargs`](@ref).
+"""
 get_conservative_interp_kwargs(; kwargs...) =
     get_conservative_interp_kwargs(merge(default_conservative_interp_kwargs, kwargs)) # merge kwargs (pairs iterator) into the default DCIKT then strip it down to the relevant keys / reorder if we added any
 
 
 """
-1D Conservative Regridder
+    conservative_regridder(x, xp, yp; kwargs...)
 
-Given points (xp, yp), regrids to points (x,y) such that the integral of the function over the new points is (approximately) equal to the integral of the function over the old points
-This is done by integrating the spline over the area of influence of each point, which is defined as the region over which the point is the nearest neighbor in the new grid. 
-
-When upsampling, this should mostly just follow the spline (though slightly diffusive -- NOTE: is there any way to stop this diffusion from the "area of influence"? i.e. to be able to retrieve the original values? not really the spline is inherently diffusive of each point's delta fcn.
-When downsampling though, you gain conservation when you otherwise would not have it.
-
-TODO: Make a 2D version of this (including support for the 2D versio of conservative_spline_values for conservative regridding in 2D) (see `conservative_interpolate() in CalibrateEDMF.HelperFuncs`
-
+Mass-conserving 1D regrid from source nodes `(xp, yp)` onto target coordinates `x`.
 """
 function conservative_regridder(
     x::AbstractVector{FT},
@@ -496,6 +501,11 @@ function conservative_spline_values(
         enforce_positivity = enforce_positivity, nnls_alg = nnls_alg, nnls_tol = nnls_tol, A = A, Af = Af)
 end
 
+"""
+    conservative_mass_matrix(xc; method = FastLinear1DInterpolation, bc = ExtrapolateBoundaryCondition(), k = 1)
+
+Build the mass matrix used by conservative vertical regridding on cell centers `xc`.
+"""
 function conservative_mass_matrix(
     xc::AbstractVector{FT};
     bc::BCT = ExtrapolateBoundaryCondition(),

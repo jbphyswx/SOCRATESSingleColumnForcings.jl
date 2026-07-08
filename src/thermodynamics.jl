@@ -36,15 +36,24 @@ bisection saturation adjustment. Requires no external dependency. Pass a
 struct DefaultThermodynamicsBackend <: AbstractThermodynamicsBackend end
 
 # --- generic seam: declared here, methods added per backend (naive below; accurate in the ext) --
-function equilibrium_condensate end   # (backend, T, p, q_tot)      -> (q_liq, q_ice)
-function air_density end              # (backend, T, p, q_tot)      -> ρ
-function virtual_temperature end      # (backend, T, p, q_tot)      -> T_v
-function liquid_ice_pottemp end       # (backend, T, p, q_tot)      -> θ_liq_ice
-function dry_pottemp end              # (backend, T, p)             -> θ_dry
-function saturation_adjust_pθq end    # (backend, p, θ_liq_ice, q_tot) -> (T, q_liq, q_ice)
-function q_vap_saturation_liquid end  # (backend, T, p)             -> q* over liquid
-function calc_qg_from_pgTg end        # (backend, pg, Tg)           -> surface q at saturation
-function saturation_q_tot_from_pgTg end # (backend, pg, Tg)         -> surface saturation total water
+"""Equilibrium condensate partition `(q_liq, q_ice)` from `(T, p, q_tot)`."""
+function equilibrium_condensate end
+"""Moist air density [kg/m³]."""
+function air_density end
+"""Virtual temperature [K]."""
+function virtual_temperature end
+"""Liquid-ice potential temperature [K]."""
+function liquid_ice_pottemp end
+"""Dry potential temperature [K]."""
+function dry_pottemp end
+"""Saturation adjustment from `(p, θ_liq_ice, q_tot)` → `(T, q_liq, q_ice)`."""
+function saturation_adjust_pθq end
+"""Saturation specific humidity over liquid."""
+function q_vap_saturation_liquid end
+"""Surface total specific humidity at saturation."""
+function calc_qg_from_pgTg end
+"""Surface saturation total-water mixing ratio."""
+function saturation_q_tot_from_pgTg end
 
 # ============================================================================================ #
 # Naive backend physics (`DefaultThermodynamicsBackend`).

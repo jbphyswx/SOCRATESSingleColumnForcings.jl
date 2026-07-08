@@ -1,12 +1,9 @@
 
 """
-This is a function to get the pressure and density profiles for a given flight number/forcing to use as the reference profiles in TC.jl
-    We will:
-        Read p, t
-        Calculate ρ
-        return a named tuple with p_c, p_f, ρ_c, ρ_f
+    les_reference_profiles(flight_number; forcing_type = ObsForcing(), new_zc = nothing, new_zf = nothing)
 
-SAM seems to hold ρ constant with time, so we can probably just rely on that
+Pressure and density reference profiles for TurbulenceConvection initialization.
+Returns `(; p_c, p_f, ρ_c, ρ_f)` on cell/face vertical grids.
 """
 function les_reference_profiles(
     flight_number::Int;
