@@ -215,10 +215,10 @@ src/
   field_altitude.jl                 # lev → z (hypsometric)
   ground_insertion.jl               # surface row insertion in 4-D fields
   netcdf_fields.jl                  # NetCDF read helpers
-  thermodynamics.jl                 # thermo-free seam + DefaultThermodynamicsBackend
+  thermodynamics.jl                 # method stubs + DefaultThermodynamicsBackend
   interpolation/                    # self-contained Interpolation submodule
   open_atlas_les_inputs.jl          # Atlas input I/O
-  open_atlas_les_outputs.jl          # Atlas LES output I/O
+  open_atlas_les_outputs.jl         # Atlas LES output I/O
   les_reference_profiles.jl         # p/ρ reference profiles for TC.jl
 ext/                                # optional-backend extensions
 Data/Atlas_LES_Profiles/            # download script + upstream links

@@ -1,14 +1,14 @@
 # ============================================================================================ #
-# Thermo-free thermodynamics seam (field-array; no state carriers).
+# Thermodynamics
 #
 # The pipeline works directly on scalar fields `(T, p, q_tot)` — there is no thermodynamic state
 # object. Derived quantities (condensate partition, density, virtual temperature, liquid-ice
-# potential temperature) are recomputed on demand from those fields by a set of generic "seam"
+# potential temperature) are recomputed on demand from those fields by a set of generic
 # functions. The physics comes from a *backend* selected by dispatch on the `thermo_params`
 # handle the caller threads through the pipeline:
 #
-#   * `DefaultThermodynamicsBackend` (defined here) — naive ideal-gas / Clausius–Clapeyron
-#     fallback so the package is usable with **no** external thermodynamics dependency.
+#   * `DefaultThermodynamicsBackend` (defined here) — default ideal-gas / Clausius–Clapeyron
+#      so the package is usable with **no** external thermodynamics dependency.
 #   * `Thermodynamics.jl`, via `…ThermodynamicsExt` — accurate physics; the extension adds
 #     methods dispatching on `Thermodynamics.Parameters.ThermodynamicsParameters` (which is
 #     therefore itself a valid `thermo_params` backend).
@@ -35,7 +35,7 @@ bisection saturation adjustment. Requires no external dependency. Pass a
 """
 struct DefaultThermodynamicsBackend <: AbstractThermodynamicsBackend end
 
-# --- generic seam: declared here, methods added per backend (naive below; accurate in the ext) --
+# --- generic mthods: declared here, methods added per backend (default below; accurate in the ext) --
 """Equilibrium condensate partition `(q_liq, q_ice)` from `(T, p, q_tot)`."""
 function equilibrium_condensate end
 """Moist air density [kg/m³]."""
@@ -63,7 +63,7 @@ function saturation_q_tot_from_pgTg end
 # `ThermodynamicsParameters`); the accurate methods live in the extension.
 # ============================================================================================ #
 
-# Physical constants (SI), returned as `Float64`; seam functions convert to the working `FT`.
+# Physical constants (SI), returned as `Float64`; functions convert to the working `FT`.
 @inline e_ref(::DefaultThermodynamicsBackend, ::Type{FT} = Float64) where {FT} = FT(611.2)        # reference saturation vapor pressure over liquid [Pa]
 @inline R_d(::DefaultThermodynamicsBackend, ::Type{FT} = Float64) where {FT} = FT(287.058)       # dry-air gas constant [J/kg/K]
 @inline R_v(::DefaultThermodynamicsBackend, ::Type{FT} = Float64) where {FT} = FT(461.5)               # water-vapor gas constant [J/kg/K]

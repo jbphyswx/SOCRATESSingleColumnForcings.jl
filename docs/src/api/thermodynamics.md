@@ -4,8 +4,8 @@
 CurrentModule = SSCF
 ```
 
-The core defines a thermo-free seam with [`DefaultThermodynamicsBackend`](@ref). Load
-`Thermodynamics.jl` to activate `SOCRATESSingleColumnForcingsThermodynamicsExt` for accurate physics.
+The core defines a [`DefaultThermodynamicsBackend`](@ref). Load
+`Thermodynamics.jl` to activate `SOCRATESSingleColumnForcingsThermodynamicsExt` for a more fully-featured thermodynamics setup, custom pameters, and more.
 
 ## Backends
 
@@ -14,7 +14,7 @@ AbstractThermodynamicsBackend
 DefaultThermodynamicsBackend
 ```
 
-## Seam functions (naive backend)
+## Thermodynamics functions 
 
 ```@docs
 equilibrium_condensate

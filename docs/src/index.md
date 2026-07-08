@@ -49,4 +49,4 @@ See [References](references.md) for citations. Release notes live in [NEWS.md](h
 
 ## API reference
 
-Docstrings are rendered under **API** in the sidebar (`get_column_forcing`, `Interpolation.build_spline`, I/O helpers, thermodynamics seam, etc.).
+Docstrings are rendered under **API** in the sidebar (`get_column_forcing`, `Interpolation.build_spline`, I/O helpers, thermodynamics methods, etc.).

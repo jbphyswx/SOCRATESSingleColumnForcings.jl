@@ -3,14 +3,14 @@ using SOCRATESSingleColumnForcings: SOCRATESSingleColumnForcings as SSCF
 using Thermodynamics: Thermodynamics as TD
 
 # ---------------------------------------------------------------------------
-# Cross-backend consistency: the naive `DefaultThermodynamicsBackend` and the
+# Cross-backend consistency: the default `DefaultThermodynamicsBackend` and the
 # accurate Thermodynamics.jl backend (via the extension) must agree to
 # physically-justified tolerances over a realistic sounding. Tolerances reflect
-# the intrinsic difference between the two formulations — the naive backend's
+# the intrinsic difference between the two formulations — the default backend's
 # constant-L₀ Clausius–Clapeyron saturation is the loosest term (~15%); density
 # ~1%; potential and virtual temperatures agree to well under 1%.
 # ---------------------------------------------------------------------------
-Test.@testset "Thermodynamics seam: naive vs accurate backend" begin
+Test.@testset "Thermodynamics comparison: default vs Thermodynamics.jl extension backend" begin
     b = SSCF.DefaultThermodynamicsBackend()
 
     # Dependency free Thermodynamics param_set
@@ -54,7 +54,7 @@ Test.@testset "Thermodynamics seam: naive vs accurate backend" begin
     pts = [(288.0, 1.0e5, 0.012), (280.0, 9.0e4, 0.008), (270.0, 7.0e4, 0.004),
            (250.0, 5.0e4, 0.001), (230.0, 3.0e4, 2.0e-4), (290.0, 1.0e5, 0.02)]
 
-    Test.@testset "seam functions agree over the sounding" begin
+    Test.@testset "backends agree over the sounding" begin
         for (T, p, q) in pts
             Test.@test isapprox(SSCF.dry_pottemp(b, T, p), SSCF.dry_pottemp(tp, T, p); rtol = 2e-3)
             Test.@test isapprox(SSCF.virtual_temperature(b, T, p, q), SSCF.virtual_temperature(tp, T, p, q); rtol = 5e-3)

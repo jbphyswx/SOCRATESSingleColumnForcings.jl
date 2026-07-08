@@ -2,13 +2,10 @@ using Test: Test
 using SOCRATESSingleColumnForcings: SOCRATESSingleColumnForcings as SSCF
 
 # ---------------------------------------------------------------------------
-# Unit tests for the naive `DefaultThermodynamicsBackend` seam in isolation:
-# no external Thermodynamics.jl dependency, no data files. Each testset pins a
-# physical property of the fallback backend. Cross-backend agreement with the
-# accurate Thermodynamics.jl path lives separately in
-# `unit_thermodynamics_consistency.jl`.
+# Unit tests for the default `DefaultThermodynamicsBackend`:
+# Each testset pins a physical property of the fallback backend.
 # ---------------------------------------------------------------------------
-Test.@testset "Thermodynamics seam (naive backend)" begin
+Test.@testset "Thermodynamics (default backend)" begin
     b = SSCF.DefaultThermodynamicsBackend()
 
     Test.@testset "physical constants (1-arg and FT-parameterized)" begin

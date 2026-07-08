@@ -1,9 +1,9 @@
 module SOCRATESSingleColumnForcingsThermodynamicsExt
 
-# Accurate thermodynamics backend: Thermodynamics.jl 1.x (stateless). The SSCF thermodynamics seam
-# is defined here dispatched directly on `ThermodynamicsParameters` — the parameter set *is* the
+# Accurate thermodynamics backend: Thermodynamics.jl 1.x (stateless). The SSCF thermodynamics methods
+# are defined here dispatched directly on `ThermodynamicsParameters` — the parameter set *is* the
 # accurate backend. No state objects, no wrapper, no funnel, no compatibility layer: plain
-# scalar-field calls into Thermodynamics.jl. (The naive fallback backend
+# scalar-field calls into Thermodynamics.jl. (The default fallback backend
 # `DefaultThermodynamicsBackend` lives in the core.)
 
 using SOCRATESSingleColumnForcings: SOCRATESSingleColumnForcings as SSCF
@@ -13,7 +13,7 @@ using Thermodynamics: Thermodynamics as TD
 @inline SSCF.R_d(thermo_params::TD.Parameters.ThermodynamicsParameters{FT}, ::Type{FT2} = FT) where {FT, FT2} = FT2(TD.Parameters.R_d(thermo_params))
 @inline SSCF.R_v(thermo_params::TD.Parameters.ThermodynamicsParameters{FT}, ::Type{FT2} = FT) where {FT, FT2} = FT2(TD.Parameters.R_v(thermo_params))
 @inline SSCF.grav(thermo_params::TD.Parameters.ThermodynamicsParameters{FT}, ::Type{FT2} = FT) where {FT, FT2} = FT2(TD.Parameters.grav(thermo_params))
-# SSCF's seam uses ε = M_v/M_d ≈ 0.622 (meteorological), e.g. q_sat = ε·e/(p−(1−ε)e). Thermodynamics'
+# SSCF's default uses ε = M_v/M_d ≈ 0.622 (meteorological), e.g. q_sat = ε·e/(p−(1−ε)e). Thermodynamics'
 # own `molmass_ratio` is the INVERSE (M_d/M_v = R_v/R_d ≈ 1.608, aliased to `Rv_over_Rd`), and it was
 # removed outright in some 1.x releases. Compute ε directly from R_d/R_v to be both correct and
 # version-independent.
@@ -32,7 +32,7 @@ function SSCF.air_density(thermo_params::TD.Parameters.ThermodynamicsParameters,
     return TD.air_density(thermo_params, T, p, q_tot, q_liq, q_ice)
 end
 
-# (backend, T, p, q_tot) -> ρ — moist density from total water (the seam form the pipeline calls).
+# (backend, T, p, q_tot) -> ρ — moist density from total water (the form the pipeline calls).
 SSCF.air_density(thermo_params::TD.Parameters.ThermodynamicsParameters, T, p, q_tot) =
     TD.air_density(thermo_params, T, p, q_tot)
 
@@ -43,7 +43,7 @@ end
 
 # ------------------------------------------------------------ #
 
-# (backend, T, q_tot, q_liq, q_ice) -> T_v — matches the naive backend's seam signature (no `p`; the
+# (backend, T, q_tot, q_liq, q_ice) -> T_v — matches the default backend's signature (no `p`; the
 # partition suffices). `lev_to_z` calls this 4-argument (after-backend) form.
 function SSCF.virtual_temperature(thermo_params::TD.Parameters.ThermodynamicsParameters, T, q_tot, q_liq, q_ice)
     return TD.virtual_temperature(thermo_params, T, q_tot, q_liq, q_ice)
