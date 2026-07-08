@@ -520,8 +520,12 @@ function _column_subsidence(
     thermodynamics_backend,
     ::Type{FT},
 ) where {FT}
-    ω = data["omega"]
-    dpdt_g = data["Ptend"]
+    # Materialize the raw NCDataset variables at the boundary: `dpdt_g` is broadcast directly below (it
+    # does not pass through `combine_air_and_ground_data`'s materialize guard), so leaving it lazy pushes a
+    # `CFVariable`/`ReshapedDiskArray` into the subsidence broadcast — whose eltype infers to `Any` on some
+    # Julia versions, breaking downstream. Loading once here also avoids lazy per-element disk reads.
+    ω = _materialize(data["omega"])
+    dpdt_g = _materialize(data["Ptend"])
     dpdt_g = add_dim(dpdt_g, z_dim_num) # should be lon lat lev time (hopefully order was already correct)
     ω = combine_air_and_ground_data(ω, dpdt_g, z_dim_num; insert_location = ground_indices)
 
@@ -549,7 +553,9 @@ function _column_subsidence(
     # future source broke that assumption, this broadcast errors loudly rather than silently permuting
     # dims to a same-size-but-wrong-semantics layout.)
     g = grav(thermodynamics_backend, FT)
-    return @. -(ω - (dpdt_g * f_p)) / (ρ * g)
+    subsidence = f_p
+    @. subsidence = -(ω - (dpdt_g * f_p)) / (ρ * g)
+    return subsidence
 
     # maybe it's an upwinding thing? what if we turn off ascent within 3 indices of either edge
     # subsidence_buffer = 0
