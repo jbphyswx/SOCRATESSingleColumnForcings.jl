@@ -215,10 +215,7 @@ function lev_to_z_from_LES_output(
         dimnames_LES = NC.dimnames(p_LES)
         tdn_LES = findfirst(x -> x == "time", dimnames_LES)
 
-        summary_file = atlas_socrates_summary_file(flight_number)
-        SOCRATES_summary = NC.Dataset(summary_file, "r")
-        flight_ind = findfirst(vec(Array(SOCRATES_summary["flight_number"])) .== flight_number)
-        initial_time = SOCRATES_summary["reference_time"][flight_ind] - Dates.Hour(12)
+        initial_time = get_socrates_initial_time(flight_number)
 
         t_in = Array(data["tsec"])
         bdate_data = Array(data["bdate"])

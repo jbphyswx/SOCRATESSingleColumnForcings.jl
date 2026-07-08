@@ -63,6 +63,15 @@ function combine_air_and_ground_data(
         end
     end
 
+    # Materialize any lazy disk-backed inputs BEFORE `repeat`/`cat`. Raw NCDatasets variables reach here
+    # from the `compute` methods (e.g. `data["divT"]`), and repeating a lazy `CFVariable` indexes it
+    # element-by-element — ~275x the allocation of the materialized array (measured), the pipeline's single
+    # largest allocation source. `_materialize` is a no-op on a plain `Array` and strips `Missing`→`NaN`,
+    # the same conversion the downstream regrid already applies, so results are unchanged. Kept AFTER the
+    # label-based reshape above, which relies on `NC.dimnames` labels still being present.
+    vardata = vardata isa AbstractArray ? _materialize(vardata) : vardata
+    vardatag = vardatag isa AbstractArray ? _materialize(vardatag) : vardatag
+
     # Broadcast out singleton dimensions to match sizes except for concat dim.
     # We avoid integer-division based repeat factors because they can silently
     # produce zeros for non-divisible shapes.

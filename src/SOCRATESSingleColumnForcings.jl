@@ -107,6 +107,7 @@ end
 include("interpolation/Interpolation.jl")
 
 include("../Data/Atlas_LES_Profiles/download_atlas_les_profiles.jl") # in Data/, not src/ (static path so the module stays statically analyzable)
+include("metadata.jl")
 include("open_atlas_les_inputs.jl")
 include("open_atlas_les_outputs.jl")
 include("array_utils.jl")

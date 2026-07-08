@@ -170,6 +170,10 @@ function var_to_new_coord(
     conservative_interp::Bool = false,
     conservative_interp_kwargs::Interpolation.DCIKT = Interpolation.default_conservative_interp_kwargs,
     weight = nothing, # for extensive variables and for conservative regridding, you may wish to weight by something like density when interpolating in z...
+    # Precomputed regridded weight = the `interp(weight)` normalization denominator. When supplied it is
+    # used directly, skipping the redundant second `interp_along_dim(weight, …)`: that denominator is
+    # identical for every field regridded with the same (weight, grid, method), so the caller computes it once.
+    weight_regridded = nothing,
     A::Union{Nothing, AbstractArray} = nothing, # for extensive variables and for conservative regridding, you may wish to weight by something like density when interpolating in z...
     Af::Union{Nothing, AbstractArray, LinearAlgebra.Factorization} = nothing, # precomputed factorization of A :: technically, A being Diagonal, or Triangular or something could lead to AbstractMatrix Af so we allow both AbstractMatrix and Factorization
 ) where {interpolant_coord_types <: Tuple, interpolant_value_types <: Tuple, drop_collinear}
@@ -210,7 +214,7 @@ function var_to_new_coord(
 
     else
 
-        return interp_along_dim(
+        num = interp_along_dim(
             vardata .* weight,
             interp_dim,
             coord_in,
@@ -227,24 +231,30 @@ function var_to_new_coord(
             conservative_interp_kwargs = conservative_interp_kwargs,
             A = A,
             Af = Af,
-        ) ./ interp_along_dim(
-            weight,
-            interp_dim,
-            coord_in,
-            interpolant_coord_types,
-            interpolant_value_types,
-            Val(drop_collinear);
-            interp_dim_out = coord_new,
-            data = data,
-            data_func = data_func,
-            interp_dim_in_is_full_array = (size(coord_in) == size(vardata)),
-            interp_method = interp_method,
-            interp_kwargs = interp_kwargs,
-            conservative_interp = conservative_interp,
-            conservative_interp_kwargs = conservative_interp_kwargs,
-            A = A,
-            Af = Af,
         )
+        # Denominator = interp(weight). Reuse the caller-precomputed value if given (identical across every
+        # field sharing this weight/grid/method); otherwise compute it here (bit-identical to before).
+        den =
+            isnothing(weight_regridded) ?
+            interp_along_dim(
+                weight,
+                interp_dim,
+                coord_in,
+                interpolant_coord_types,
+                interpolant_value_types,
+                Val(drop_collinear);
+                interp_dim_out = coord_new,
+                data = data,
+                data_func = data_func,
+                interp_dim_in_is_full_array = (size(coord_in) == size(vardata)),
+                interp_method = interp_method,
+                interp_kwargs = interp_kwargs,
+                conservative_interp = conservative_interp,
+                conservative_interp_kwargs = conservative_interp_kwargs,
+                A = A,
+                Af = Af,
+            ) : weight_regridded
+        return num ./ den
 
     end
 end
@@ -371,6 +381,12 @@ function regrid_to_z_and_time(
     return_before_interp::Bool = false,
     A::Union{Nothing, AbstractArray} = nothing,
     Af::Union{Nothing, AbstractArray, LinearAlgebra.Factorization} = nothing, # precomputed factorization of A :: technically, A being Diagonal, or Triangular or something could lead to AbstractMatrix Af so we allow both AbstractMatrix and Factorization
+    # Precomputed regridded-weight denominator `interp(weight)` (see `var_to_new_coord`), passed straight
+    # through to the z-interpolation so the caller can compute it ONCE and reuse it across fields.
+    weight_regridded = nothing,
+    # Return the z-interpolated field immediately, before building time splines. The caller uses this to
+    # obtain the regridded-weight denominator once (an unweighted regrid of ρ) for reuse across fields.
+    return_after_z_interp::Bool = false,
 ) where {interpolant_coord_types <: Tuple, interpolant_value_types <: Tuple}
 
     if conservative_interp && isnothing(A)
@@ -491,9 +507,15 @@ function regrid_to_z_and_time(
         conservative_interp = conservative_interp,
         conservative_interp_kwargs = conservative_interp_kwargs,
         weight = weight,
+        weight_regridded = weight_regridded,
         A = A,
         Af = Af,
     )
+
+    # caller wants just the z-regridded field (e.g. an unweighted regrid of ρ = the reusable weight denominator)
+    if return_after_z_interp
+        return vardata
+    end
 
     if initial_condition # no need to push further here since is init condition (maybe change later to return both?)
         return vardata
@@ -550,11 +572,7 @@ function initial_index(data, flight_number::Int; t_old = nothing)
     t_base = Dates.DateTime(bdate_str, Dates.DateFormat("yymmdd")) + Dates.Year(2000) # the base Date (using bdate not nbdate cause nbdate seems to have  bug in flight 9 (extra 0 in month spot))
     t = t_base .+ Dates.Second.(t_old) # the actual dates
 
-    summary_file = atlas_socrates_summary_file(flight_number)
-    SOCRATES_summary = NC.Dataset(summary_file, "r")
-
-    flight_ind = findfirst(vec(Array(SOCRATES_summary["flight_number"])) .== flight_number)
-    initial_time = SOCRATES_summary["reference_time"][flight_ind] - Dates.Hour(12) # change to select by flight number...
+    initial_time = get_socrates_initial_time(flight_number, Val(false))
     initial_ind = argmin(abs.((t .- initial_time))) # find the index of the initial time
     return initial_ind
 end

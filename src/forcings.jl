@@ -1,24 +1,3 @@
-function get_Tg_offset(flight_number::Integer, ::Type{FT} = Float64) where {FT}
-    # summary = NC.Dataset(atlas_socrates_summary_file(flight_number), "r")
-    # flight_ind = findfirst(vec(Array(summary["flight_number"])) .== flight_number)
-    # return FT(summary[:deltaT][flight_ind])
-
-    if flight_number == 1
-        return FT(1.44)
-    elseif flight_number == 9
-        return FT(-4.05)
-    elseif flight_number == 10
-        return FT(1.87)
-    elseif flight_number == 11
-        return FT(-1.48)
-    elseif flight_number == 12
-        return FT(-0.7)
-    elseif flight_number == 13
-        return FT(-0.95)
-    else
-        error("Flight number $flight_number not supported")
-    end
-end
 # --- shared surface setup ------------------------------------------------------------------- #
 # Load the forcing dataset and the reference-time / SST-offset metadata common to both surface
 # entry points. Returns `(; data, z_dim_num, time_dim_num, initial_ind, Tg_offset)`.
@@ -344,7 +323,7 @@ function get_column_forcing(
         Tg_orig = Tg # SST; Tg is reassigned to a fresh array below (never mutated), so an alias is safe
         Tg_offset = get_Tg_offset(flight_number)
 
-        Tg = Tg .+ Tg_offset
+        @. Tg += Tg_offset
 
         if Tg_offset < 0  # SST > Tg, assume Tg limits moisture below last known point and just extrapolate
             qg = calc_qg_extrapolate_pq.(
@@ -410,6 +389,27 @@ function get_column_forcing(
         ρg = air_density.(thermodynamics_backend, Tg, pg, qg, getproperty.(_cg, :q_liq), getproperty.(_cg, :q_ice))
         ρ = combine_air_and_ground_data(ρ, ρg, z_dim_num; insert_location = ground_indices)
 
+        # The mass-weight normalization denominator `interp(ρ)` is identical for every field regridded onto
+        # the same grid with the same method, so compute it ONCE here (an unweighted regrid of ρ, returned
+        # right after the z-interpolation) and reuse it across all fields via `weight_regridded`, instead of
+        # re-regridding ρ per field. It is field-independent only in the non-conservative path (conservative
+        # regridding folds in per-field `f_enhancement`), and only when every atlas field shares one grid;
+        # otherwise `nothing` → each field computes its own denominator (bit-identical to no hoisting). This
+        # is a typed local (not an `Any` cache): ρ is data that changes every call, so there is nothing to
+        # reuse across calls (unlike the grid-only `A_cache`/`Af_cache`).
+        _atlas_vars = filter(v -> output_source(Val(v)) === :atlas_input, forcing_variables)
+        weight_regridded_shared =
+            (!conservative_interp && !isempty(_atlas_vars) &&
+             all(v -> new_z[v] === new_z[first(_atlas_vars)], _atlas_vars)) ?
+            regrid_to_z_and_time(
+                ρ, new_z[first(_atlas_vars)], z_dim_num, time_dim_num, flight_number,
+                interpolant_coord_types, interpolant_value_types;
+                z_old = z_old, data = data, thermodynamics_backend, initial_condition,
+                weight = nothing, conservative_interp = false,
+                conservative_interp_kwargs = conservative_interp_kwargs,
+                return_after_z_interp = true,
+            ) : nothing
+
         # regrid one already-assembled column field onto its requested grid (+ time splines if not
         # initial_condition). By default we conservatively interpolate and weight by density — slightly
         # diffusive even for intensive variables, but it rounds corners and conserves mass.
@@ -441,6 +441,7 @@ function get_column_forcing(
                 conservative_interp = conservative_interp,
                 conservative_interp_kwargs = cons_kwargs,
                 weight = ρ,
+                weight_regridded = weight_regridded_shared,
                 A = A,
                 Af = Af,
             )[:]
@@ -470,10 +471,13 @@ function get_column_forcing(
     # === LES-sourced field: dTdt_rad ============================================================== #
     if :dTdt_rad in forcing_variables
         LES_data = open_atlas_les_output(flight_number, forcing_type).data
-        dTdt_rad = NC.nomissing(LES_data["RADQR"]) ./ (FT(24) * FT(3600)) # K/day -> K/s (drops nc dim metadata, yields Array)
+        # `_materialize` bulk-loads the lazy CFVariable ONCE (the package's standard NC boundary helper);
+        # operating on the lazy variable directly indexes it element-by-element (per-element allocation,
+        # the same trap as `combine`).
+        dTdt_rad = _materialize(LES_data["RADQR"]) ./ (FT(24) * FT(3600)) # K/day -> K/s (drops nc dim metadata, yields Array)
         z_dim_num_LES = dim_num("z", LES_data["RADQR"]) # assume same for all LES 2D vars
         time_dim_num_LES = dim_num("time", LES_data["RADQR"])
-        ρ_LES = NC.nomissing(LES_data["RHO"])
+        ρ_LES = _materialize(LES_data["RHO"])
 
         A, Af = _AAf(A_cache, Af_cache, :dTdt_rad, Interpolation.FastLinear1DInterpolation)
         dTdt_rad = regrid_to_z_and_time(
