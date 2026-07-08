@@ -1,6 +1,6 @@
 module SOCRATESSingleColumnForcingsThermodynamicsExt
 
-# Accurate thermodynamics backend: Thermodynamics.jl 1.x (stateless). The SSCF thermodynamics methods
+# Thermodynamics.jl 1.x backend. The SSCF thermodynamics methods that
 # are defined here dispatched directly on `ThermodynamicsParameters` — the parameter set *is* the
 # accurate backend. No state objects, no wrapper, no funnel, no compatibility layer: plain
 # scalar-field calls into Thermodynamics.jl. (The default fallback backend
@@ -72,7 +72,7 @@ function SSCF.saturation_adjust_pθq(thermo_params::TD.Parameters.Thermodynamics
     FT = eltype(thermo_params)
     _tol = tol === nothing ? FT(1.0e-6) : FT(tol)
     sat = TD.saturation_adjustment(TD.RS.NewtonsMethod, thermo_params, TD.pθ_li(), FT(p), FT(θ_liq_ice), FT(q_tot), maxiter, _tol)
-    return sat.T, sat.q_liq, sat.q_ice
+    return (; T = sat.T, q_liq = sat.q_liq, q_ice = sat.q_ice)
 end
 
 SSCF.q_vap_saturation_liquid(thermo_params::TD.Parameters.ThermodynamicsParameters, T, p) =

@@ -315,9 +315,9 @@ function get_column_forcing(
         # the altitude integration uses `T_L` for `T` (biasing `z` at saturated levels) and density
         # ignores the condensate loading (`q_vap = q_tot - q_liq - q_ice`). `q_tot` is unchanged.
         _state = saturation_adjust_pθq.(thermodynamics_backend, p, dry_pottemp.(thermodynamics_backend, T, p), q)
-        T = map(s -> s[1], _state)      # actual temperature
-        q_liq = map(s -> s[2], _state)  # equilibrium liquid (condensate-aware density)
-        q_ice = map(s -> s[3], _state)  # equilibrium ice
+        T = map(s -> s.T, _state)      # actual temperature
+        q_liq = map(s -> s.q_liq, _state)  # equilibrium liquid (condensate-aware density)
+        q_ice = map(s -> s.q_ice, _state)  # equilibrium ice
 
         # add the ΔT from the summary table (Atlas §3: really T_2m - SST; table 2 has the sign backwards)
         Tg_orig = Tg # SST; Tg is reassigned to a fresh array below (never mutated), so an alias is safe
