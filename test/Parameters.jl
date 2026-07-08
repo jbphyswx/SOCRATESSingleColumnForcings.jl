@@ -5,17 +5,15 @@ module Parameters
 
 # ADAPTED FROM  https://github.com/CliMA/TurbulenceConvection.jl/blob/99d35cafd158d8793fa744f773d5f942d6e74488/driver/parameter_set.jl
 # and https://github.com/CliMA/TurbulenceConvection.jl/blob/7b4666baca418b00bb60e929de96fcc06100de57/src/Parameters.jl
-# import SurfaceFluxes as SF
-import CloudMicrophysics as CM
+# using SurfaceFluxes: SurfaceFluxes as SF
+# using CloudMicrophysics: CloudMicrophysics as CM
 
 abstract type AbstractTurbulenceConvectionParameters end
 const ATCP = AbstractTurbulenceConvectionParameters
 
 
-import CLIMAParameters as CP
-import Thermodynamics as TD
-import Thermodynamics.Parameters as TDP
-const TDPS = TD.Parameters.ThermodynamicsParameters
+using CLIMAParameters: CLIMAParameters as CP
+using Thermodynamics: Thermodynamics as TD
 
 pairs = NamedTuple()
 
@@ -24,9 +22,9 @@ FT = Float64
 FTD = Float64
 
 toml_dict = CP.create_toml_dict(FT; dict_type = "alias")
-aliases = string.(fieldnames(TDP.ThermodynamicsParameters))
+aliases = string.(fieldnames(TD.Parameters.ThermodynamicsParameters))
 param_pairs = CP.get_parameter_values!(toml_dict, aliases, "Thermodynamics")
-thermo_params = TDP.ThermodynamicsParameters{FT}(; param_pairs...)
+thermo_params = TD.Parameters.ThermodynamicsParameters{FT}(; param_pairs...)
 TP = typeof(thermo_params)
 
 
@@ -74,7 +72,7 @@ thermodynamics_params(ps::Union{ATCP}) = CM.Parameters.thermodynamics_params(ps.
 # #####
 # # Gonna try to figure out all the parameters we need to make a parameter set for what is in this module w/o too many external dependinces esp TC.jl, SF.jl, CM.jl, etc
 
-for var in fieldnames(TDPS)
+for var in fieldnames(TD.Parameters.ThermodynamicsParameters)
     @eval $var(ps::ATCP) = TD.Parameters.$var(thermodynamics_params(ps))
 end
 

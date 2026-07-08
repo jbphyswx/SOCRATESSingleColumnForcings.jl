@@ -1,10 +1,7 @@
-# import TurbulenceConvection as TC
-import CLIMAParameters as CP
-import CloudMicrophysics as CM
-# import SurfaceFluxes as SF
-# import SurfaceFluxes.UniversalFunctions as UF
-import Thermodynamics as TD
-# import TurbulenceConvection.Parameters as TCP
+using CLIMAParameters: CLIMAParameters as CP
+using CloudMicrophysics: CloudMicrophysics as CM
+using SurfaceFluxes: SurfaceFluxes as SF
+using Thermodynamics: Thermodynamics as TD
 
 #! format: off
 function create_parameter_set(
@@ -154,7 +151,7 @@ function create_parameter_set(
     pairs = CP.get_parameter_values!(toml_dict, aliases, "UniversalFunctions")
     pairs = (; pairs...) # convert to NamedTuple
     pairs = (; Pr_0 = pairs.Pr_0_Businger, a_m = pairs.a_m_Businger, a_h = pairs.a_h_Businger, ζ_a = pairs.ζ_a_Businger, γ = pairs.γ_Businger)
-    ufp = UF.BusingerParams{FTD}(; pairs...)
+    ufp = SF.UniversalFunctions.BusingerParams{FTD}(; pairs...)
     UFP = typeof(ufp)
 
     pairs = CP.get_parameter_values!(toml_dict, ["von_karman_const"], "SurfaceFluxesParameters")

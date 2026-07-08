@@ -2,8 +2,8 @@
 Download LES forcing data from https://atmos.uw.edu/~ratlas/SOCRATES-LES-cases.html
 =#
 
-import NCDatasets as NC
-import SOCRATESSingleColumnForcings as SSCF
+using NCDatasets: NCDatasets as NC  
+using SOCRATESSingleColumnForcings: SOCRATESSingleColumnForcings as SSCF
 
 
 thisdir = @__DIR__ # doesn't seem to work to use @__DIR__ directly as a variable

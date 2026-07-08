@@ -1,9 +1,9 @@
-using Test
-import NCDatasets as NC
-import SOCRATESSingleColumnForcings as SSCF
+using Test: Test
+using NCDatasets: NCDatasets as NC
+using SOCRATESSingleColumnForcings: SOCRATESSingleColumnForcings as SSCF
 
-@testset "NCDatasets compatibility guards" begin
-    @testset "Array(var) preserves shape" begin
+Test.@testset "NCDatasets usage" begin
+    Test.@testset "Array(var) preserves shape" begin
         mktempdir() do dir
             path = joinpath(dir, "shape_test.nc")
 
@@ -17,14 +17,14 @@ import SOCRATESSingleColumnForcings as SSCF
 
             dsr = NC.Dataset(path, "r")
             var = dsr["v"]
-            @test length(var[:]) == 6
-            @test size(Array(var)) == (2, 3)
-            @test Array(var) == vals
+            Test.@test length(var[:]) == 6
+            Test.@test size(Array(var)) == (2, 3)
+            Test.@test Array(var) == vals
             close(dsr)
         end
     end
 
-    @testset "combine_air_and_ground_data handles insertion index shape" begin
+    Test.@testset "combine_air_and_ground_data handles insertion index shape" begin
         # vardata: [x, y, z, t]
         vardata = reshape(collect(1.0:24.0), 2, 1, 3, 4)
         # vardatag: [x, y, t] (no z dimension)
@@ -34,7 +34,7 @@ import SOCRATESSingleColumnForcings as SSCF
 
         out = SSCF.combine_air_and_ground_data(vardata, vardatag, 3; insert_location)
 
-        @test size(out) == (2, 1, 4, 4)
-        @test selectdim(out, 3, 2) == vardatag
+        Test.@test size(out) == (2, 1, 4, 4)
+        Test.@test selectdim(out, 3, 2) == vardatag
     end
 end

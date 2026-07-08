@@ -1,21 +1,23 @@
 module SOCRATESSingleColumnForcings
 
-import Thermodynamics as TD
-const TDP = TD.Parameters
-import NCDatasets as NC
+using NCDatasets: NCDatasets as NC  
 using NCDatasets: NCDatasets
 using Artifacts: Artifacts
 using Pkg: Pkg
 using DelimitedFiles: DelimitedFiles
 using Statistics: Statistics
-using Dierckx: Dierckx
 using LinearAlgebra: LinearAlgebra
 using Dates: Dates
 using Downloads: Downloads
 using StaticArrays: StaticArrays
 
 
-resolve_nan(x::FT, val::FT = FT(0.0)) where {FT} = isnan(x) ? FT(val) : x # replace nan w/ 0
+const package_root = dirname(@__DIR__)
+const artifacts_toml = joinpath(package_root, "Artifacts.toml")
+
+include("thermodynamics.jl")
+
+resolve_nan(x::FT, val::FT = zero(FT)) where {FT} = isnan(x) ? FT(val) : x # replace nan w/ 0
 function resolve_nan!(x::AbstractArray{FT}, val::FT = FT(0.0)) where {FT}
     @inbounds for i in eachindex(x)
         x[i] = resolve_nan(x[i], val)
@@ -24,187 +26,75 @@ end
 # resolve_inf(x::FT; val::FT=FT(NaN)) where {FT} = isinf(x) ? val : x # replace inf with NaN
 # resolve_not_finite(x::FT, val = FT(0.0)) where {FT} = !isfinite(x) ? FT(val) : x # replace inf and nan with 0
 
-# include our files
-const FT = Float64
+# --- forcing source -------------------------------------------------------------------------- #
+"""
+    AbstractForcingType
+
+A SOCRATES forcing source, encoded as a singleton type so behavior is selected by dispatch
+(consistent with the thermodynamics/interpolation backends). Concrete: [`ObsForcing`](@ref)
+(observation-based) and [`ERA5Forcing`](@ref) (ERA5-reanalysis-based).
+"""
+abstract type AbstractForcingType end
+struct ObsForcing <: AbstractForcingType end
+struct ERA5Forcing <: AbstractForcingType end
+
+const forcing_types = (ObsForcing(), ERA5Forcing())
+
+# label symbol (kept for API compatibility)
+symbol(::ObsForcing) = :Obs
+symbol(::ERA5Forcing) = :ERA5
+
+"""
+    forcing_key(forcing_type)
+
+The `:obs_data` / `:ERA5_data` symbol that keys the data group and the artifact/download layer —
+distinct from the `:Obs` / `:ERA5` label returned by [`symbol`](@ref).
+"""
+forcing_key(::ObsForcing) = :obs_data
+forcing_key(::ERA5Forcing) = :ERA5_data
+
 const flight_numbers = (1, 9, 10, 11, 12, 13)
-const forcing_types = (:obs_data, :ERA5_data) # maybe change these to [:obs,:ERA5] later? would need to mirror in Cases.jl in TC.jl
-const TDPS = TD.Parameters.ThermodynamicsParameters
-const package_root = dirname(@__DIR__)
-const artifacts_toml = joinpath(package_root, "Artifacts.toml")
+@inline is_valid_flight_number(::ObsForcing, flight_number::Integer) = flight_number in (1, 9, 10, 12, 13)
+@inline is_valid_flight_number(::ERA5Forcing, flight_number::Integer) = flight_number in (1, 9, 10, 11, 12, 13)
 
-function phase_equil_pTq(param_set::TDPS, p, T, q_tot)
-    FT = promote_type(typeof(p), typeof(T), typeof(q_tot), eltype(param_set))
-    _p = FT(p)
-    _T = FT(T)
-    _q_tot = FT(q_tot)
-    ρ = TD.air_density(param_set, _T, _p, _q_tot)
-    (q_liq, q_ice) = TD.condensate_partition(param_set, _T, ρ, _q_tot)
-    return (; p = _p, T = _T, q_tot = _q_tot, q_liq = FT(q_liq), q_ice = FT(q_ice))
-end
 
-function phase_equil_pθq(param_set::TDPS, p, θ_li, q_tot)
-    FT = promote_type(typeof(p), typeof(θ_li), typeof(q_tot), eltype(param_set))
-    _p = FT(p)
-    _θ_li = FT(θ_li)
-    _q_tot = FT(q_tot)
-    sat = TD.saturation_adjustment(TD.RS.NewtonsMethod, param_set, TD.pθ_li(), _p, _θ_li, _q_tot, 50, FT(1e-6))
-    return (; p = _p, T = FT(sat.T), q_tot = _q_tot, q_liq = FT(sat.q_liq), q_ice = FT(sat.q_ice))
-end
 
-air_pressure_compat(::TDPS, ts) = ts.p
-
-air_density_compat(param_set::TDPS, ts) =
-    TD.air_density(param_set, ts.T, ts.p, ts.q_tot, ts.q_liq, ts.q_ice)
-
-virtual_temperature_compat(param_set::TDPS, ts) =
-    TD.virtual_temperature(param_set, ts.T, ts.q_tot, ts.q_liq, ts.q_ice)
 
 # Two cases with shallow cloud-topped boundary layers, RF12 and RF13, are run on a 192-level vertical grid.
 # The other four cases have clouds extending through deeper boundary layers; they are run on a 320-level vertical grid.
-const grid_heights = Dict(1 => 320, 9 => 320, 10 => 320, 11 => 320, 12 => 192, 13 => 192)
+const grid_heights = Base.ImmutableDict(1 => 320, 9 => 320, 10 => 320, 11 => 320, 12 => 192, 13 => 192) # this might be slow idk..
 
-# Singleton BC types
-abstract type AbstractBoundaryCondition end
-struct ExtrapolateBoundaryCondition <: AbstractBoundaryCondition end
-struct ErrorBoundaryCondition <: AbstractBoundaryCondition end
-struct NearestBoundaryCondition <: AbstractBoundaryCondition end
-
-const ValidBoundaryConditions = Union{ExtrapolateBoundaryCondition, ErrorBoundaryCondition, NearestBoundaryCondition}
-
-# string for instances
-bc_string(::ExtrapolateBoundaryCondition) = "extrapolate"
-bc_string(::ErrorBoundaryCondition) = "error"
-bc_string(::NearestBoundaryCondition) = "nearest"
-
-# --- create_bc chain ---
-
-create_bc(x::AbstractBoundaryCondition) = x # pass through
-create_bc(s::String) = create_bc(Symbol(lowercase(strip(s))))
-create_bc(s::Symbol) = create_bc(Val(s))
-
-# valid BCs
-create_bc(::Val{:extrapolate}) = ExtrapolateBoundaryCondition()
-create_bc(::Val{:error}) = ErrorBoundaryCondition()
-create_bc(::Val{:nearest}) = NearestBoundaryCondition()
-
-# fallback (dynamic, no extra functions)
-
-create_bc(::Val{s}) where {s} = error(
-    "Invalid boundary condition symbol: $s. Valid options are " *
-    repr((T -> string(T())).(Base.uniontypes(ValidBoundaryConditions))),
-)
-
-
-abstract type AbstractInterpolationMethod end
-abstract type AbstractPCHIPInterpolationMethod <: AbstractInterpolationMethod end
-struct PCHIPInterpolationMethod <: AbstractPCHIPInterpolationMethod end
-Base.@kwdef struct PCHIPSmoothDerivativeInterpolationMethod <: AbstractPCHIPInterpolationMethod
-    f_enhancement_factor::Int = 1
-    f_p_enhancement_factor::Int = 1
+@inline function grid_height(flight_number::T) where {T <: Integer}
+    if flight_number in (1, 9, 10, 11)
+        return T(320)
+    elseif flight_number in (12, 13)
+        return T(192)
+    else
+        error("Invalid flight number: $flight_number")
+    end
 end
-struct DierckxSpline1DInterpolationMethod <: AbstractInterpolationMethod
-    k::Int
-end
-struct FastLinear1DInterpolationMethod <: AbstractInterpolationMethod end # Consider repalcing one day with Interpolations.jl - That has Linear() NoInterp() and Throw() BCs... and can hold SVectors and be isbits etc. Notably, however, integration is missing natively so we'd have to implement it, but `Interpolations.gradient()` is provided for the derivative
-const FastLinear1DInterpolation = FastLinear1DInterpolationMethod()
+
+
+
+
+
 
 # struct InterpolaionsJLMethod <: AbstractInterpolationMethod end # Has so many methods
 
+# Interpolation submodule (self-contained: stdlib + StaticArrays only). Included before the source
+# files below that call `Interpolation.*`. Nothing is exported into this parent namespace; package
+# source reaches the API through qualified calls (`Interpolation.foo`).
+include("interpolation/Interpolation.jl")
 
-create_svector(x::AbstractVector) = StaticArrays.SVector{length(x)}(x) # create an SVector from an array, this is the same as SVector(x...) but faster [still slow bc length(x) is looked up at compile time]
-create_svector(x::NTuple{N, FT}) where {FT, N} = StaticArrays.SVector{N, FT}(x) # create an SVector from a tuple, this is the same as SVector(x...) but faster [still slow bc length(x) is looked up at compile time]
-
-
-
-#=
-For the nnls_alg,
-[https://www.sciencedirect.com/science/article/pii/S1877050917307858] explains the active and passive sets well.
-[https://conservancy.umn.edu/server/api/core/bitstreams/ef5b0697-b7ea-4e5b-9d97-92b29a2f468e/content] chapter 2 points out that the pivot methods tend to be computationally optimal for NNLS (Kim and Park is in NonNegLeastSquares.jl)
-
-
-The true profile shouldn't be incredibly spiky , and thus A\b should not induce many negative numbers in the A\b inversion). Thus the `active set` (numbers set to 0 because they violated the nonnegativity constraint) is usually small, so we usually don't need many iterations to find a solution
-
-Because A is usually tridiagonal (maybe septadiagonal at worse for cubic splines) the inversions which might ordinarily be expensive are actually quite fast -- caching doesn't seem to improve performance.
-
-
-Some sample timings with A = (1000x1000) and tridiagonal (but full matrix type, not LinearAlgebra.Tridiagonal) and M = (1000,) is fully dense and not sparse (few zeros):
-
-
-@btime nonneg_lsq($A, $M; alg=:nnls) evals=2 samples=2  # doesn't support `tol`
-    1.027 s (13 allocations: 7.68 MiB)
-
-@btime nonneg_lsq($A, $M; alg=:nnls) evals=2 samples=2 
-
-
-@btime nonneg_lsq($A, $M; alg=:fnnls, tol=1e-12) evals=2 samples=2 
-    6.200 s (22914 allocations: 3.71 GiB)
-@btime nonneg_lsq($A, $M; alg=:pivot, tol=1e-8) evals=2 samples=2
-    6.258 s (22914 allocations: 3.71 GiB)
-
-
-@btime nonneg_lsq($A, $M; alg=:pivot, tol=1e-8) evals=2 samples=2
-    33.881 ms (48 allocations: 38.25 MiB)     : This is 
-@btime nonneg_lsq($A, $M; alg=:nnls, tol=1e-12) evals=2 samples=2
-    35.031 ms (48 allocations: 38.25 MiB)
-
-So, :pivot is over 150x faster, with about 100x fewer allocations than :fnnls, but does allocate more than :mmls
-
-For the pivot variants, :cache and :comb
-
-@btime nonneg_lsq($A, $M; alg=:pivot, tol=1e-12, variant=:cache) evals=2 samples=2
-    909.911 ms (67 allocations: 76.54 MiB)
-
-@btime nonneg_lsq($A, $M; alg=:pivot, tol=1e-12, variant=:comb) evals=2 samples=2
-    932.510 ms (113 allocations: 76.54 MiB)
-
-I thk the active sets are just too small for caching things to be worth it
-
-
-The only quirk is that :pivot can leave some very small negative numbers in the solution, which we have to resolve to 0, but that's very fast to do.
-
-This probably also explains why :pivot was the default in the original code.
-
-Note if you're doing fully random matrices for A, :pivot was slower, but then that's not really a realistic representation of what the workflow would be for regridding input variables like this where A is sparse and has a real structure from the grid.
-=#
-
-const default_conservative_interp_kwargs = (;
-    preserve_monotonicity = true,
-    enforce_positivity = false,
-    nnls_alg = :pivot, # should be optimal for most cases, see the discussion above.
-    nnls_tol = FT(1e-8), # default for package
-    enforce_conservation = true,
-    integrate_method = :invert,
-)
-
-const DCIKT = typeof(default_conservative_interp_kwargs)
-const DCIKDT = Dict{Symbol, Union{Bool, Symbol, FT}} # Dict for conservative interpolation kwargs
-const default_conservative_interp_kwargs_dict = DCIKDT(pairs(default_conservative_interp_kwargs))
-
-get_conservative_interp_kwargs(::Nothing) = default_conservative_interp_kwargs
-
-get_conservative_interp_kwargs(conservative_interp_kwargs::NamedTuple) = NamedTuple((
-    key => get(conservative_interp_kwargs, key, default_conservative_interp_kwargs[key]) for
-    key in keys(default_conservative_interp_kwargs)
-)) # convert arbitrary NamedTuple or Dict to DCIKT, keeping only relevant keys and defaulting to the new tuple but falling back to the old one if not found
-
-get_conservative_interp_kwargs(conservative_interp_kwargs::Dict) = get_conservative_interp_kwargs(
-    NamedTuple((Symbol(k) => isa(v, String) ? Symbol(v) : v for (k, v) in conservative_interp_kwargs)),
-) # convert any strings to symbols and then passed to the NamedTuple constructor
-
-
-get_conservative_interp_kwargs(conservative_interp_kwargs::DCIKT) =
-    merge(default_conservative_interp_kwargs, conservative_interp_kwargs) # merge between two DCIKTs (should maybe be faster than the iterative method above)
-
-get_conservative_interp_kwargs(; kwargs...) =
-    get_conservative_interp_kwargs(merge(default_conservative_interp_kwargs, kwargs)) # merge kwargs (pairs iterator) into the default DCIKT then strip it down to the relevant keys / reorder if we added any
-
-include(joinpath("..", "Data", "Atlas_LES_Profiles", "download_atlas_les_profiles.jl")) # not in src so don't include automatically
+include("../Data/Atlas_LES_Profiles/download_atlas_les_profiles.jl") # in Data/, not src/ (static path so the module stays statically analyzable)
 include("open_atlas_les_inputs.jl")
 include("open_atlas_les_outputs.jl")
-include("helper_functions.jl")
-include("process_case.jl")
-# include("interpolating_methods.jl") # currently only helper_functions.jl reads these
-# include("les_reader_helper.jl") # currently only helper_functions.jl reads these
-include("get_LES_reference_profiles.jl")
+include("array_utils.jl")
+include("netcdf_fields.jl")
+include("ground_insertion.jl")
+include("field_altitude.jl")
+include("regrid.jl")
+include("forcings.jl")
+include("les_reference_profiles.jl")
 
 end
