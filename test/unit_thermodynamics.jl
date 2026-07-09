@@ -74,7 +74,7 @@ Test.@testset "Thermodynamics (default backend)" begin
         T, p, q_tot = 285.0, 90000.0, 1e-4
         θ = SSCF.dry_pottemp(b, T, p)
         T_rec, q_liq, q_ice = SSCF.saturation_adjust_pθq(b, p, θ, q_tot)
-        Test.@test isapprox(T_rec, T; atol = 1e-2)   # to the naive bisection tolerance
+        Test.@test isapprox(T_rec, T; atol = 1e-2)   # to the bisection tolerance
         Test.@test q_liq == 0.0 && q_ice == 0.0
     end
 

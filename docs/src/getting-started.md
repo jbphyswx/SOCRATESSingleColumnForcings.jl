@@ -19,26 +19,22 @@ julia --project=. -e 'using Pkg; Pkg.instantiate()'
 
 Julia ≥ 1.10 is required.
 
-## 2. Download data
+## 2. Data
 
-Atlas LES input and output files are stored as Julia artifacts (see [data-and-artifacts.md](data-and-artifacts.md)).
+Atlas LES input/output files are registered as **lazy Julia artifacts**, so they download and cache automatically the first time you open or build from a flight — no manual download step (see [data-and-artifacts.md](data-and-artifacts.md)).
 
 ```julia
 using SOCRATESSingleColumnForcings: SOCRATESSingleColumnForcings as SSCF
 
-# Input forcing files (obs-based and/or ERA5-based)
-SSCF.download_atlas_les_inputs(flight_numbers = [9], forcing_types = (:obs_data,))
-SSCF.download_atlas_les_inputs(flight_numbers = [9], forcing_types = (:ERA5_data,))
-
-# LES output files (needed for :dTdt_rad)
-SSCF.download_atlas_les_outputs(flight_numbers = [9], forcing_types = (:obs_data, :ERA5_data))
+# Triggers the lazy download on first use, then returns the opened dataset:
+inp = SSCF.open_atlas_les_input(9, SSCF.ObsForcing())
 ```
 
-Verify a file is present without opening it:
+For raw retrieval into a directory of your choice (optional — mirrors the originals from Box/UW; note the positional `destdir`):
 
 ```julia
-p = SSCF.open_atlas_les_input(9, SSCF.ObsForcing(); open_files = false)
-isfile(p.data)  # true after download
+SSCF.download_atlas_les_inputs("/path/to/dir"; flight_numbers = [9])
+SSCF.download_atlas_les_outputs("/path/to/dir"; flight_numbers = [9])  # LES output (needed for :dTdt_rad)
 ```
 
 ## 3. Choose a thermodynamics backend
@@ -135,7 +131,7 @@ k = 15         # vertical index on new_z
 w_subs    = forcing.subsidence[k](t)
 ```
 
-Boundary conditions on built splines default to `ErrorBoundaryCondition()` (error outside the stored time range). Surface time series from `get_surface_conditions` use extrapolation.
+Boundary conditions on built splines default to `ErrorBoundaryCondition()` (error outside the stored time range). Surface time series from `get_surface_forcing` use extrapolation.
 
 ## 6. Surface conditions
 
@@ -149,7 +145,7 @@ surf = SSCF.get_surface_reference_state(9, SSCF.ObsForcing(); thermodynamics_bac
 Time-dependent surface forcings (each field is a built time interpolant):
 
 ```julia
-surf = SSCF.get_surface_conditions(9, SSCF.ObsForcing(); thermodynamics_backend = tp)
+surf = SSCF.get_surface_forcing(9, SSCF.ObsForcing(); thermodynamics_backend = tp)
 # surf.pg(t), surf.Tg(t), surf.Tsfc(t), surf.qg(t), surf.qsfc(t)
 ```
 

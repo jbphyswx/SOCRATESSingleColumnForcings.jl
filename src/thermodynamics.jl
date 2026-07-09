@@ -7,21 +7,16 @@
 # functions. The physics comes from a *backend* selected by dispatch on the `thermo_params`
 # handle the caller threads through the pipeline:
 #
-#   * `DefaultThermodynamicsBackend` (defined here) — default ideal-gas / Clausius–Clapeyron
-#      so the package is usable with **no** external thermodynamics dependency.
-#   * `Thermodynamics.jl`, via `…ThermodynamicsExt` — accurate physics; the extension adds
-#     methods dispatching on `Thermodynamics.Parameters.ThermodynamicsParameters` (which is
-#     therefore itself a valid `thermo_params` backend).
-#
-# The core names no Thermodynamics type. This keeps `src/` byte-identical across the 0.15
-# (Thermo 0.11) and 0.16 (Thermo 1.x) release lines — the divergence lives only in the ext.
+#   * `DefaultThermodynamicsBackend` (defined here) — ideal-gas / Clausius–Clapeyron, usable with
+#     no external thermodynamics dependency.
+#   * a backend added by a package extension, which dispatches these functions on its own parameter set.
 # ============================================================================================ #
 
 """
     AbstractThermodynamicsBackend
 
-Supertype for naive, dependency-free thermodynamics backends. The accurate path does not
-subtype this — it dispatches on `Thermodynamics.Parameters.ThermodynamicsParameters` directly.
+Supertype for the built-in, dependency-free thermodynamics backend. Extension backends dispatch
+on their own parameter set and need not subtype this.
 """
 abstract type AbstractThermodynamicsBackend end
 Base.broadcastable(backend::AbstractThermodynamicsBackend) = tuple(backend)
@@ -29,9 +24,9 @@ Base.broadcastable(backend::AbstractThermodynamicsBackend) = tuple(backend)
 """
     DefaultThermodynamicsBackend()
 
-Naive fallback backend: ideal-gas density, Clausius–Clapeyron saturation (constant `L_v0`/`L_s0`), and a
-bisection saturation adjustment. Requires no external dependency. Pass a
-`ThermodynamicsParameters` instead (with `Thermodynamics.jl` loaded) for accurate physics.
+Built-in dependency-free backend: ideal-gas density, Clausius–Clapeyron saturation (constant
+`L_v0`/`L_s0`), and a bisection saturation adjustment. An extension backend can be used instead by
+passing its parameter set as `thermodynamics_backend`.
 """
 struct DefaultThermodynamicsBackend <: AbstractThermodynamicsBackend end
 

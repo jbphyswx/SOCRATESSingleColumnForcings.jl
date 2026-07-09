@@ -1,8 +1,12 @@
 # NEWS
 
-## Unreleased
+## v0.14.0
 
 Major source reorganization and performance-oriented interpolation storage. **Breaking** for code that called `process_case`, unqualified interpolation symbols, or paths under removed files.
+
+### Thermodynamics
+
+- Supports `Thermodynamics = "0.11, 0.12, 0.13, 0.14, 0.15"` (via the package extension).
 
 ### Package layout
 
@@ -15,7 +19,7 @@ Major source reorganization and performance-oriented interpolation storage. **Br
 - **`get_column_forcing`** replaces `process_case`. Returns a `NamedTuple` keyed by requested `forcing_variables` (default: `supported_forcing_variables`).
 - Custom `forcing_variables` subsets with validation and lazy shared precompute.
 - Added `:T_nudge` output.
-- Surface helpers: `get_surface_reference_state`, `get_surface_conditions`.
+- Surface helpers: `get_surface_reference_state`, `get_surface_forcing`.
 - Forcing source selected by type: `ObsForcing()`, `ERA5Forcing()`.
 
 ### Interpolation
@@ -42,38 +46,7 @@ Major source reorganization and performance-oriented interpolation storage. **Br
 - Added Documenter.jl site (`docs/make.jl`, `docs/src/`, CI workflow `.github/workflows/docs.yml`).
 - User guides: getting started, forcings, interpolation, data/artifacts.
 
-## v0.14.0
 
-This release is the breaking compatibility port for the modern SOCRATES / ClimaAtmos calibration stack.
-
-- Ported SSCF to `Thermodynamics = "1"`, `ForwardDiff = "1"`, and `NCDatasets = "0.14"`.
-- Replaced `TD.PhaseEquil_pTq` / `TD.PhaseEquil_pθq` and the `TD.ThermodynamicState` dispatch
-  type with thin internal wrappers (`phase_equil_pTq`, `phase_equil_pθq`) that return plain
-  named tuples, decoupling the package from Thermodynamics internals.
-- Added `air_pressure_compat`, `air_density_compat`, and `virtual_temperature_compat` helpers
-  so that downstream computations on thermodynamic-state named tuples read naturally.
-- Hardened all NetCDF read paths against NCDatasets v0.13+ lazy `CFVariable` /
-  `DiskArrays.BroadcastDiskArray` behavior:
-  - Every read boundary now calls `Array(var)` explicitly (documented NCDatasets API).
-  - Added `_materialize(x)` as the single boundary guard before interpolation; uses
-    `NCDatasets.nomissing(arr, FT(NaN))` with a **type-matched NaN** (via
-    `Base.nonmissingtype`) so `Float32` arrays stay `Float32` rather than widening to `Float64`.
-  - Removed the thin wrappers `read_all_dims` and `read_vector`; all call sites now use
-    `Array(var)` / `vec(Array(var))` directly, eliminating an indirection layer that
-    obscured lazy-vs-eager semantics.
-- Added `read_profile_at_time` and `read_profiles_over_time` as explicit, contract-checked
-  helpers that produce concrete `Vector` / `Matrix` results with shape assertions.
-- Cleaned up module-level imports: no longer re-exports `nomissing`, `readdlm`, `mean`,
-  `Spline1D`, `factorize`, `SVector`, or `download` into the package namespace.
-- Added `package_root` and `artifacts_toml` as module-level constants replacing ad-hoc
-  path constructions in download helpers.
-- Added focused regression tests:
-  - `unit_ncdatasets_compat.jl` — `Array(var)` shape preservation across NCDatasets versions
-  - `unit_shape_contracts.jl` — profile / `(z, time)` extraction contract assertions
-  - `unit_interp_methods.jl` — interpolation method correctness, including lazy/missing inputs
-  - `integration_process_case.jl` — end-to-end process-case smoke test (opt-in slow path)
-- Split tests into fast default unit coverage (pass `test_args=["unit","no_integration"]`)
-  and an opt-in slow integration matrix.
 
 ## v0.13.13
 

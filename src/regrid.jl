@@ -34,7 +34,7 @@ function interp_along_dim(
     interp_dim_in,
     ::Type{interpolant_coord_types} = Tuple{Vector, Nothing},   # (backing, eltype) spec TYPE for the coordinate; `Nothing` = passthrough
     ::Type{interpolant_value_types} = Tuple{Vector, Nothing},   # (backing, eltype) spec TYPE for the values
-    ::Val{drop_collinear} = Val(false),
+    drop_collinear_val::Val{drop_collinear} = Val(false),
     ;
     interp_dim_out = nothing,
     data = nothing,
@@ -105,7 +105,7 @@ function interp_along_dim(
             # One path for any AbstractVector backing and either drop setting.
             xin = coord_conv(interp_dim_in)
             result = map(eachslice(vardata; dims = Tuple(d for d in 1:ndims(vardata) if d != interp_dim_num))) do d
-                Interpolation.build_spline(interp_method, xin, value_conv(d); bc = bc, drop_collinear = drop_collinear)
+                Interpolation.build_spline(interp_method, xin, value_conv(d); bc = bc, drop_collinear = drop_collinear_val)
             end
             return add_dim(result, interp_dim_num) # reinsert the size-1 interp dim to match the evaluate-path layout
 
@@ -129,7 +129,7 @@ function interp_along_dim(
             # each slice is the 2-column matrix (d[:,1] = coord, d[:,2] = data), pruned per
             # `drop_collinear` during construction; `map` sets the eltype from the results.
             result = map(eachslice(_input; dims = Tuple(d for d in 1:ndims(_input) if d != interp_dim_num && d != catd))) do d
-                Interpolation.build_spline(interp_method, coord_conv(d[:, 1]), value_conv(d[:, 2]); bc = bc, drop_collinear = drop_collinear)
+                Interpolation.build_spline(interp_method, coord_conv(d[:, 1]), value_conv(d[:, 2]); bc = bc, drop_collinear = drop_collinear_val)
             end
             return add_dim(result, interp_dim_num) # reinsert the size-1 interp dim (catd reduced out)
         else

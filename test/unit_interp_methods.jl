@@ -232,7 +232,7 @@ Test.@testset "Interpolation primitives" begin
     Test.@testset "build_spline: SVector backing preserved (no-drop)" begin
         xs = SSCF.Interpolation.create_svector([0.0, 1.0, 2.0])
         ys = SSCF.Interpolation.create_svector([0.0, 10.0, 20.0])
-        s = SSCF.Interpolation.build_spline(SSCF.Interpolation.FastLinear1DInterpolation, xs, ys; bc = ext, drop_collinear = false)
+        s = SSCF.Interpolation.build_spline(SSCF.Interpolation.FastLinear1DInterpolation, xs, ys; bc = ext, drop_collinear = Val(false))
         Test.@test s.xp isa SSCF.Interpolation.StaticArrays.SVector
         Test.@test length(s.xp) == 3
         Test.@test isapprox(s(1.5), 15.0; atol = 1e-12)
@@ -247,8 +247,8 @@ Test.@testset "Interpolation primitives" begin
         Test.@test xk == [0.0, 2.0, 4.0]
         Test.@test yk == [0.0, 20.0, 30.0]
         # pruned spline evaluates identically to the unpruned one
-        s_drop = SSCF.Interpolation.build_spline(SSCF.Interpolation.FastLinear1DInterpolation, xp, fp; bc = ext, drop_collinear = true)
-        s_full = SSCF.Interpolation.build_spline(SSCF.Interpolation.FastLinear1DInterpolation, xp, fp; bc = ext, drop_collinear = false)
+        s_drop = SSCF.Interpolation.build_spline(SSCF.Interpolation.FastLinear1DInterpolation, xp, fp; bc = ext, drop_collinear = Val(true))
+        s_full = SSCF.Interpolation.build_spline(SSCF.Interpolation.FastLinear1DInterpolation, xp, fp; bc = ext, drop_collinear = Val(false))
         Test.@test length(s_drop.xp) < length(s_full.xp)
         Test.@test all(isapprox(s_drop(x), s_full(x); atol = 1e-12) for x in 0.0:0.1:4.0)
     end

@@ -3,7 +3,7 @@
 
 # ---------------------------------------------------------------------------
 # Integration tests for `get_column_forcing` and the surface functions
-# (`get_surface_reference_state` / `get_surface_conditions` /
+# (`get_surface_reference_state` / `get_surface_forcing` /
 # `les_reference_profiles`). Data-guarded (skips flights/forcings whose
 # input files aren't present) and NNLS-conditional (only exercises
 # `enforce_positivity=true` when the NonNegLeastSquares extension is loaded).
@@ -54,6 +54,11 @@ Test.@testset "SOCRATESSingleColumnForcings integration" begin
             )
             Test.@test out isa NamedTuple
             Test.@test keys(out) == atlas_vars
+            if !ic  # interpolant path: per-level time splines with the requested storage
+                itp = out[first(atlas_vars)][1]
+                Test.@test itp.xp isa AbstractRange && eltype(itp.fp) == Float32   # O(1) range time axis + Float32 value storage (specs honored)
+                Test.@test isa(Test.@inferred(itp(0.0)), AbstractFloat)            # type-stable eval
+            end
             n += 1
         end
         Test.@test n > 0   # at least some flight/forcing data was present and exercised
@@ -124,13 +129,31 @@ Test.@testset "SOCRATESSingleColumnForcings integration" begin
         for fl in SSCF.flight_numbers, ft in SSCF.forcing_types
             (files_present(fl, ft) && les_present(fl, ft)) || continue
             Test.@testset "fl=$fl $(SSCF.forcing_key(ft))" begin
-                Test.@test !isnothing(SSCF.get_surface_reference_state(fl, ft; thermodynamics_backend = tp))
-                Test.@test !isnothing(SSCF.get_surface_conditions(fl, ft; thermodynamics_backend = tp))
+                # surface reference state: finite scalars; the FT arg controls the output eltype
+                srs = SSCF.get_surface_reference_state(fl, ft; thermodynamics_backend = tp)
+                Test.@test all(isfinite, (srs.pg, srs.Tg, srs.q_tot_g))
+                Test.@test SSCF.get_surface_reference_state(fl, ft, Float32; thermodynamics_backend = tp).pg isa Float32
+
+                # surface forcing: type-optimized interpolants — time axis stored as an O(1) range, eval finite
+                # (eval alloc-freedom / inferrability of this interpolant type are enforced in allocations.jl / inferrability.jl)
+                sf = SSCF.get_surface_forcing(fl, ft; thermodynamics_backend = tp)
+                Test.@test keys(sf) == (:pg, :Tg, :Tsfc, :qg, :qsfc)
+                Test.@test sf.pg.xp isa AbstractRange
+                Test.@test all(isfinite, (sf.pg(0.0), sf.Tg(0.0), sf.Tsfc(0.0), sf.qg(0.0), sf.qsfc(0.0)))
+
+                # LES reference profiles: structure, finiteness, positivity, eltype control, and in-place identity
                 ref = SSCF.les_reference_profiles(fl; forcing_type = ft, new_zc = nothing, new_zf = nothing)
-                Test.@test !isnothing(ref)
                 Test.@test keys(ref) == (:p_c, :p_f, :ρ_c, :ρ_f)
                 Test.@test all(all(isfinite, getproperty(ref, k)) for k in keys(ref))
                 Test.@test all(all(getproperty(ref, k) .> 0) for k in keys(ref))   # p, ρ strictly positive
+                Test.@test SSCF.les_reference_profiles(fl, Float32; forcing_type = ft).p_c isa Vector{Float32}
+                let grid = SSCF.open_atlas_les_grid(fl).grid_data
+                    nzf = [0.0; grid]; nzc = (nzf[1:(end - 1)] .+ nzf[2:end]) ./ 2
+                    pc = similar(nzc); pf = similar(nzf); dc = similar(nzc); df = similar(nzf)
+                    ret = SSCF.les_reference_profiles!(pc, pf, dc, df, fl; forcing_type = ft, new_zc = nzc, new_zf = nzf)
+                    Test.@test ret.p_c === pc && ret.ρ_f === df   # wrote into the caller's buffers
+                    Test.@test all(isfinite, pc) && all(isfinite, df)
+                end
             end
             n += 1
         end

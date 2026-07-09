@@ -29,7 +29,7 @@ itp = SSCF.Interpolation.build_spline(
     SSCF.Interpolation.FastLinear1DInterpolation,
     xp, fp;
     bc = SSCF.Interpolation.ErrorBoundaryCondition(),
-    drop_collinear = true,
+    drop_collinear = Val(true),
 )
 val = itp(x)
 ```

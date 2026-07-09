@@ -25,6 +25,7 @@ supported_forcing_variables
 get_column_forcing
 default_new_z
 les_reference_profiles
+les_reference_profiles!
 ```
 
 ## Surface
@@ -32,5 +33,5 @@ les_reference_profiles
 ```@docs
 get_SSCF_surface_reference_state!
 get_surface_reference_state
-get_surface_conditions
+get_surface_forcing
 ```

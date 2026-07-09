@@ -140,14 +140,17 @@ get_surface_reference_state(flight_number, forcing_type, FT = Float64;
 
 Returns `(; pg, Tg, q_tot_g)` scalars at the reference timestep. Surface moisture logic follows Atlas §3 (SST vs ambient-RH branch controlled by `get_Tg_offset`).
 
-### `get_surface_conditions`
+### `get_surface_forcing`
 
 ```julia
-get_surface_conditions(flight_number, forcing_type;
-    thermodynamics_backend = DefaultThermodynamicsBackend())
+get_surface_forcing(flight_number, forcing_type,
+    interpolant_coord_types = Tuple{StepRangeLen, Nothing},
+    interpolant_value_types = Tuple{Vector, Float64};
+    thermodynamics_backend = DefaultThermodynamicsBackend(),
+    drop_collinear = Val(false))
 ```
 
-Returns `(; pg, Tg, Tsfc, qg, qsfc)` — each value is a built time interpolant aligned to model clock (t = 0 at reference time). Uses extrapolation boundary conditions.
+Returns `(; pg, Tg, Tsfc, qg, qsfc)` — each value a built time interpolant aligned to the model clock (t = 0 at the reference time), with extrapolation boundary conditions. The `Tuple{Backing, Eltype}` storage specs (as in `get_column_forcing`) give type-stable, allocation-free interpolants; the default coordinate spec stores the time axis as a `UniformRange` for O(1) evaluation.
 
 ### `get_Tg_offset`
 
@@ -155,17 +158,19 @@ Flight-specific SST offset (Atlas table; sign convention documented in source).
 
 ## `les_reference_profiles`
 
-Builds center/face pressure and density profiles for TurbulenceConvection initialization:
+Center/face pressure and density reference profiles on given vertical grids, as `FT` vectors `(; p_c, p_f, ρ_c, ρ_f)`:
 
 ```julia
-les_reference_profiles(flight_number;
+les_reference_profiles(flight_number, FT = Float64;
     forcing_type = ObsForcing(),
-    new_zc = nothing,
-    new_zf = nothing,
-)
+    new_zc = nothing, new_zf = nothing,
+    interp_method = Interpolation.FastLinear1DInterpolation,
+    interp_kwargs = (; bc = Interpolation.NearestBoundaryCondition()),
+    conservative_interp = false,
+    conservative_interp_kwargs = Interpolation.default_conservative_interp_kwargs)
 ```
 
-Default: `new_zf = [0; grid_data]`, `new_zc` at midpoints. Requires LES output for `p`, `ρ`.
+Default: `new_zf = [0; grid_data]`, `new_zc` at midpoints. Requires LES output for `p`, `ρ`. The vertical regrid uses the same machinery as the forcing profiles — `interp_method` / `interp_kwargs` / `conservative_interp` — via `var_to_new_coord`. An in-place `les_reference_profiles!(p_c, p_f, ρ_c, ρ_f, flight_number; …)` writes into caller-provided buffers (the buffers' element type sets the output type).
 
 ## `default_new_z`
 
@@ -192,7 +197,7 @@ Typical TC driver pattern:
 
 1. `les_reference_profiles` → initial `p`, `ρ` on column grid
 2. `get_column_forcing` → nudging / advection / subsidence interpolants
-3. `get_surface_conditions` → time-varying surface BCs
+3. `get_surface_forcing` → time-varying surface BCs
 4. At each timestep `t`, evaluate `forcing.H_nudge[k](t)`, etc.
 
 Pass the same `ThermodynamicsParameters` used by the model for consistent θ\_liq\_ice and saturation adjustment.

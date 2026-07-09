@@ -72,16 +72,28 @@ end
 
 
 """
-    get_surface_conditions(flight_number, forcing_type; thermodynamics_backend)
+    get_surface_forcing(flight_number, forcing_type,
+                           interpolant_coord_types = Tuple{StepRangeLen, Nothing},
+                           interpolant_value_types = Tuple{Vector, Float64};
+                           thermodynamics_backend)
 
 Time-dependent surface conditions from the reference timestep onward. Returns
 `(; pg, Tg, Tsfc, qg, qsfc)` — each field a built time interpolant (extrapolating BC).
+
+The `Tuple{Backing, Eltype}` storage specs (as in [`get_column_forcing`](@ref)) are threaded through
+[`Interpolation.coerce_vector`](@ref) so the returned interpolants are type-stable and allocation-free
+to evaluate; the default coordinate spec stores the shared time axis as a `UniformRange` (O(1) lookup).
+`drop_collinear` prunes collinear nodes of the built interpolants; it must stay `false` with a
+range-backed coordinate spec (pruning would break the axis's uniformity).
 """
-function get_surface_conditions(
+function get_surface_forcing(
     flight_number::Integer,
-    forcing_type::AbstractForcingType;
+    forcing_type::AbstractForcingType,
+    ::Type{interpolant_coord_types} = Tuple{StepRangeLen, Nothing},
+    ::Type{interpolant_value_types} = Tuple{Vector, Float64};
     thermodynamics_backend = DefaultThermodynamicsBackend(),
-)
+    drop_collinear::Val = Val(false),
+) where {interpolant_coord_types <: Tuple, interpolant_value_types <: Tuple}
     (; data, z_dim_num, time_dim_num, initial_ind, Tg_offset) = _surface_setup(flight_number, forcing_type)
 
     pg = NCDatasets.nomissing(vec(Array(data["Ps"])))[initial_ind:end]
@@ -105,14 +117,19 @@ function get_surface_conditions(
     tg = vec(Array(data["tsec"]))[initial_ind:end]
     tg = tg .- tg[1] # start at t = 0 so the interpolants are model-clock aligned
 
-    # build each interpolant ONCE; evaluation is alloc-free (matches the forcing's stored-object pattern)
+    # Coerce the shared time axis and each value series into the requested storage (backing, eltype) before
+    # building — so the returned interpolants are type-stable and allocation-free to evaluate. The default
+    # coordinate spec stores `tg` as a `UniformRange`, giving O(1) lookups instead of a binary search.
+    coord_conv = Base.Fix1(Interpolation.coerce_vector, interpolant_coord_types)
+    value_conv = Base.Fix1(Interpolation.coerce_vector, interpolant_value_types)
+    tg = coord_conv(tg)
     bc = Interpolation.ExtrapolateBoundaryCondition()
     return (;
-        pg = Interpolation.build_spline(Interpolation.FastLinear1DInterpolation, tg, pg; bc),
-        Tg = Interpolation.build_spline(Interpolation.FastLinear1DInterpolation, tg, Tg; bc),
-        Tsfc = Interpolation.build_spline(Interpolation.FastLinear1DInterpolation, tg, Tg_orig; bc), # SST, for correct sensible/latent fluxes
-        qg = Interpolation.build_spline(Interpolation.FastLinear1DInterpolation, tg, qg; bc),
-        qsfc = Interpolation.build_spline(Interpolation.FastLinear1DInterpolation, tg, qg_orig; bc), # q* of the actual SST
+        pg = Interpolation.build_spline(Interpolation.FastLinear1DInterpolation, tg, value_conv(pg); bc, drop_collinear),
+        Tg = Interpolation.build_spline(Interpolation.FastLinear1DInterpolation, tg, value_conv(Tg); bc, drop_collinear),
+        Tsfc = Interpolation.build_spline(Interpolation.FastLinear1DInterpolation, tg, value_conv(Tg_orig); bc, drop_collinear), # SST, for correct sensible/latent fluxes
+        qg = Interpolation.build_spline(Interpolation.FastLinear1DInterpolation, tg, value_conv(qg); bc, drop_collinear),
+        qsfc = Interpolation.build_spline(Interpolation.FastLinear1DInterpolation, tg, value_conv(qg_orig); bc, drop_collinear), # q* of the actual SST
     )
 end
 
@@ -529,7 +546,7 @@ function _column_subsidence(
     dpdt_g = add_dim(dpdt_g, z_dim_num) # should be lon lat lev time (hopefully order was already correct)
     ω = combine_air_and_ground_data(ω, dpdt_g, z_dim_num; insert_location = ground_indices)
 
-    # this i think was wrong -- maybe get atlas to confirm what version of the sigmoid she used.
+    # Despite matching documentation, this was wrong -- Atlas confirmed what version of the sigmoid she used (see comments below)
     # c    = 100
     # a    = -2 + exp(250/c)
     # f_p  = @. 2(a+1) / (a+exp(p_full/c)) - 1
@@ -556,18 +573,6 @@ function _column_subsidence(
     subsidence = f_p
     @. subsidence = -(ω - (dpdt_g * f_p)) / (ρ * g)
     return subsidence
-
-    # maybe it's an upwinding thing? what if we turn off ascent within 3 indices of either edge
-    # subsidence_buffer = 0
-    # nz = size(subsidence, z_dim_num)
-    # valid_subsidence = align_along_dimension(1:nz, z_dim_num)
-    # valid_subsidence = (valid_subsidence .> subsidence_buffer) .& (valid_subsidence .<= (nz - subsidence_buffer))
-    # subsidence = subsidence .* (subsidence .>0) + subsidence .* (subsidence .<0) .* valid_subsidence # remove any ascent near boundaries to test if that is more stable...
-
-    # subsidence = max.(subsidence,0)  # stability test (unstable) (all ascent)
-    # subsidence = min.(subsidence, 0)  # stability test (stable!) ( all subsidence ) # testing getting rid of this to see if the stability problem had been fixed elsewhere (it hasn't lol, tested)
-    # m = .007 # almost stable .005 | unstable .007
-    # subsidence[subsidence .> m] .= m # stability test -- can we tolerate any ascent?
 end
 
 """

@@ -23,13 +23,15 @@ Test.@testset "hot-path eval is allocation-free" begin
     I = SSCF.Interpolation
     ext = I.ExtrapolateBoundaryCondition()
 
-    su = I.build_spline(I.FastLinear1DInterpolation, collect(0.0:1.0:40.0), sin.(0.0:1.0:40.0); bc = ext, drop_collinear = false)          # Vector, uniform (O(1))
-    si = I.build_spline(I.FastLinear1DInterpolation, [0.0, 1.0, 3.0, 7.0, 15.0, 31.0], cos.([0.0, 1.0, 3.0, 7.0, 15.0, 31.0]); bc = ext, drop_collinear = false)  # Vector, irregular (search)
-    ss = I.build_spline(I.FastLinear1DInterpolation, I.create_svector(collect(0.0:1.0:9.0)), I.create_svector(collect(0.0:2.0:18.0)); bc = ext, drop_collinear = false)  # SVector, isbits
+    sr = I.build_spline(I.FastLinear1DInterpolation, 0.0:1.0:40.0, sin.(0.0:1.0:40.0); bc = ext, drop_collinear = Val(false))                   # range coord (StepRangeLen) → O(1); the storage get_surface_forcing / get_column_forcing produce
+    su = I.build_spline(I.FastLinear1DInterpolation, collect(0.0:1.0:40.0), sin.(0.0:1.0:40.0); bc = ext, drop_collinear = Val(false))          # Vector, uniform (search)
+    si = I.build_spline(I.FastLinear1DInterpolation, [0.0, 1.0, 3.0, 7.0, 15.0, 31.0], cos.([0.0, 1.0, 3.0, 7.0, 15.0, 31.0]); bc = ext, drop_collinear = Val(false))  # Vector, irregular (search)
+    ss = I.build_spline(I.FastLinear1DInterpolation, I.create_svector(collect(0.0:1.0:9.0)), I.create_svector(collect(0.0:2.0:18.0)); bc = ext, drop_collinear = Val(false))  # SVector, isbits
 
-    su(7.3); si(5.0); ss(2.5)   # warm up / compile
-    allocation_test(su, 7.3); allocation_test(si, 5.0); allocation_test(ss, 2.5); 
+    sr(7.3); su(7.3); si(5.0); ss(2.5)   # warm up / compile
+    allocation_test(sr, 7.3); allocation_test(su, 7.3); allocation_test(si, 5.0); allocation_test(ss, 2.5);
 
+    Test.@test allocation_test(sr, 7.3) == 0
     Test.@test allocation_test(su, 7.3) == 0
     Test.@test allocation_test(si, 5.0) == 0
     Test.@test allocation_test(ss, 2.5) == 0

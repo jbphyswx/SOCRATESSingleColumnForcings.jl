@@ -114,10 +114,11 @@ const FastLinear1DInterpolation = FastLinear1DInterpolationMethod()
     N = length(xp)
     @inbounds x0n = xp[1]
     if isone(N)
+        y1 = convert(promote_type(eltype(fp), eltype(xp), typeof(x)), @inbounds fp[1]) # type sability
         if (bc isa NearestBoundaryCondition) || (bc isa ExtrapolateBoundaryCondition)
-            return @inbounds fp[1]
+            return y1
         else
-            return (x == x0n) ? (@inbounds fp[1]) : throw(BoundsError(xp, x))
+            return (x == x0n) ? (y1) : throw(BoundsError(xp, x))
         end
     end
     @inbounds xmin, xmax = xp[1], xp[N]
@@ -225,28 +226,34 @@ struct Fast1DLinearInterpolant{X <: AbstractVector, F <: AbstractVector, BCT <: 
     bc::BCT
 end
 
+# `drop_collinear` is a `Val` so the choice is a compile-time constant: `Val(false)` dispatches to the
+# identity (no pruning) — type-stable, allocation-free, and required for a range `xp`. `Val(true)` is the
+# cold pruning path (its result length/type depends on the data).
+@inline _maybe_prune(::Val{false}, xp, fp) = (xp, fp)
+@inline _maybe_prune(::Val{true}, xp, fp) = length(xp) > 2 ? drop_collinear_nodes(xp, fp) : (xp, fp)
+
 """
-    Fast1DLinearInterpolant(xp, fp; bc, drop_collinear = true)
+    Fast1DLinearInterpolant(xp, fp; bc, drop_collinear = Val(false))
 
 Build a piecewise-linear interpolant on nodes `(xp, fp)` (equal length). This primitive is
 backing/eltype-PRESERVING — it stores exactly the `xp`/`fp` it is given (a range `xp` stays a range,
 giving O(1) evaluation). Choosing storage (backing + element type per coord/value) is the caller's job,
 done via [`coerce_vector`](@ref) at the pipeline layer.
 
-When `drop_collinear`, collinear interior nodes are pruned via [`drop_collinear_nodes`](@ref), which
+When `drop_collinear = Val(true)`, collinear interior nodes are pruned via [`drop_collinear_nodes`](@ref), which
 preserves each node backing (`Vector -> Vector`, `SVector{N} -> SVector{keep}`). The pruned length depends
 on the node *data*, so for length-typed backings (`SVector`) construction is type-unstable and allocates
-at build time (a cold path). Set `drop_collinear = false` for the non-allocating, type-stable path (and
+at build time (a cold path). Use `drop_collinear = Val(false)` for the non-allocating, type-stable path (and
 required for a range `xp`, since pruning would break the range).
 """
 function Fast1DLinearInterpolant(
     xp::AbstractVector,
     fp::AbstractVector;
     bc::BCT = ErrorBoundaryCondition(),
-    drop_collinear::Bool = true,
+    drop_collinear::Val = Val(false),
 ) where {BCT <: ValidBoundaryConditions}
     @assert length(xp) == length(fp) "xp and fp must have the same length"
-    xk, fk = (drop_collinear && length(xp) > 2) ? drop_collinear_nodes(xp, fp) : (xp, fp)
+    xk, fk = _maybe_prune(drop_collinear, xp, fp)
     return Fast1DLinearInterpolant{typeof(xk), typeof(fk), BCT}(xk, fk, bc)
 end
 
@@ -437,7 +444,7 @@ Base.length(::Constant{T}) where {T} = 1
 @inline Base.getindex(c::Constant, ::Int) = c.value
 (itp::Fast1DLinearInterpolant{T, <: Constant, BCTO} where {T, BCTO <: ValidBoundaryConditions})(x) = begin
     if (itp.bc isa NearestBoundaryCondition) || (itp.bc isa ExtrapolateBoundaryCondition)
-        return itp.xp.value
+        return itp.fp.value
     else
         return (x == itp.xp.value) ? itp.fp.value : throw(BoundsError(itp.xp, x))
     end
@@ -454,10 +461,11 @@ end
 
 Length-`N` backing where every element equals `value` (for exactly-constant fields).
 """
-struct ConstantVector{T, N <: Integer} <: AbstractVector{T}
+struct ConstantVector{T, N} <: AbstractVector{T}
     value::T
 end
 ConstantVector(value::T) where {T} = ConstantVector{T, 1}(value)
+ConstantVector(value::T, N::Integer) where {T} = ConstantVector{T, N}(value)
 Base.IndexStyle(::Type{<:ConstantVector}) = IndexLinear()
 Base.size(::ConstantVector{T, N}) where {T, N} = (N,)
 Base.axes(::ConstantVector{T, N}) where {T, N} = (Base.OneTo(N),)
@@ -470,10 +478,41 @@ function _coerce_storage(::Type{ConstantVector}, ::Type{E}, v::AbstractVector) w
 end
 (itp::Fast1DLinearInterpolant{T, <: ConstantVector, BCTO} where {T, BCTO <: ValidBoundaryConditions})(x) = begin
     if (itp.bc isa NearestBoundaryCondition) || (itp.bc isa ExtrapolateBoundaryCondition)
-        return itp.xp.value
+        return itp.fp.value
     else
-        return (itp.xp.value[1] <= x <= itp.xp.value[end]) ? itp.fp.value : throw(BoundsError(itp.xp, x))
+        return (itp.xp[begin] <= x <= itp.xp[end]) ? itp.fp.value : throw(BoundsError(itp.xp, x))
     end
+end
+# ============================================================================================================================================= #
+
+function ConstantVector(value::Fast1DLinearInterpolant, ::Val{perform_checks} = Val(true)) where {perform_checks}
+    if perform_checks
+        all(isequal(value.fp[1]), value.fp) || error("ConstantVector requires all-equal values")
+    end
+    return ConstantVector(value.fp[1], length(value.xp))
+end
+
+function Constant(value::Fast1DLinearInterpolant, ::Val{perform_checks} = Val(true)) where {perform_checks}
+    if perform_checks
+        all(isequal(value.fp[1]), value.fp) || error("Constant requires all-equal values")
+    end
+    return Constant(value.fp[1])
+end
+
+
+function constantize_interpolant(itp::Fast1DLinearInterpolant, new_bc::ValidBoundaryConditions = itp.bc)
+    
+    if (new_bc isa ExtrapolateBoundaryCondition) || (new_bc isa NearestBoundaryCondition)
+        new_xp = Constant(itp.xp[1])
+        new_fp = Constant(itp.fp[1])
+    elseif new_bc isa ErrorBoundaryCondition
+        new_xp = itp.xp
+        new_fp = ConstantVector(itp.fp[1], length(itp.xp))
+    else
+        error("Unsupported boundary condition: $new_bc")
+    end
+
+    return Fast1DLinearInterpolant(new_xp, new_fp; bc = new_bc, drop_collinear = Val(false))
 end
 
 # ============================================================================================================================================= #
@@ -481,17 +520,18 @@ end
 # Build the interpolant for `FastLinear1DInterpolationMethod`. Backing/eltype-preserving (stores what it's
 # given); the caller controls storage via [`coerce_vector`](@ref) upstream.
 """
-    build_spline(method, xp, fp; bc = ErrorBoundaryCondition(), drop_collinear = true)
+    build_spline(method, xp, fp; bc = ErrorBoundaryCondition(), drop_collinear = Val(true))
 
 Build a 1D interpolant for `method` on nodes `(xp, fp)`. Default method is
-[`FastLinear1DInterpolation`](@ref).
+[`FastLinear1DInterpolation`](@ref). `drop_collinear` is a `Val`, so `Val(false)` keeps construction
+type-stable and allocation-free (and is required for a range-backed `xp`).
 """
 function build_spline(
     ::FastLinear1DInterpolationMethod,
     xp::AbstractVector,
     fp::AbstractVector;
     bc::BCT = ErrorBoundaryCondition(),
-    drop_collinear::Bool = true,
+    drop_collinear::Val = Val(true),
 ) where {BCT <: ValidBoundaryConditions}
     return Fast1DLinearInterpolant(xp, fp; bc = bc, drop_collinear = drop_collinear)
 end
@@ -623,7 +663,7 @@ function _prune_backing(v::AbstractRange, x, y, keep)
             prev = i
         else
             i - prev == Δ ||
-                error("drop_collinear_nodes: pruned range nodes are not uniformly spaced (cannot stay an AbstractRange); use a Vector/SVector backing or drop_collinear = false")
+                error("drop_collinear_nodes: pruned range nodes are not uniformly spaced (cannot stay an AbstractRange); use a Vector/SVector backing or drop_collinear = Val(false)")
             prev = i
         end
     end
@@ -640,7 +680,7 @@ end
 # on the reduced node set (nodes already pruned, so no second pass).
 function drop_collinear_nodes(itp::Fast1DLinearInterpolant)
     xp_kept, fp_kept = drop_collinear_nodes(itp.xp, itp.fp)
-    return Fast1DLinearInterpolant(xp_kept, fp_kept; bc = itp.bc, drop_collinear = false)
+    return Fast1DLinearInterpolant(xp_kept, fp_kept; bc = itp.bc, drop_collinear = Val(false))
 end
 
 
@@ -655,23 +695,23 @@ end
 
 # Rebuild every linear interpolant in the collection on the shared, sorted union of all their
 # nodes. Each rebuilt interpolant keeps its own boundary condition and retains every shared node
-# (`drop_collinear = false`) so the collection is defined on one common node vector.
+# (`drop_collinear = Val(false)`) so the collection is defined on one common node vector.
 function coerce_to_shared_nodes(itp_collection::AbstractVector{T}) where {T <: Fast1DLinearInterpolant}
     xs = sort(unique(reduce(vcat, (itp.xp for itp in itp_collection))))
-    return [Fast1DLinearInterpolant(xs, itp.(xs); bc = itp.bc, drop_collinear = false) for itp in itp_collection]
+    return [Fast1DLinearInterpolant(xs, itp.(xs); bc = itp.bc, drop_collinear = Val(false)) for itp in itp_collection]
 end
 
 function coerce_to_shared_nodes(itp_collection::StaticArrays.SVector{N, T}) where {N, T <: Fast1DLinearInterpolant}
     xs = sort(unique(reduce(vcat, (itp.xp for itp in itp_collection))))
     return StaticArrays.SVector{N}(
-        Fast1DLinearInterpolant(xs, itp.(xs); bc = itp.bc, drop_collinear = false) for itp in itp_collection
+        Fast1DLinearInterpolant(xs, itp.(xs); bc = itp.bc, drop_collinear = Val(false)) for itp in itp_collection
     )
 end
 
 function coerce_to_shared_nodes(itp_collection::NTuple{N, <:Fast1DLinearInterpolant}) where {N}
     xs = sort(unique(reduce(vcat, (itp.xp for itp in itp_collection))))
     return ntuple(
-        i -> Fast1DLinearInterpolant(xs, itp_collection[i].(xs); bc = itp_collection[i].bc, drop_collinear = false),
+        i -> Fast1DLinearInterpolant(xs, itp_collection[i].(xs); bc = itp_collection[i].bc, drop_collinear = Val(false)),
         Val(N),
     )
 end

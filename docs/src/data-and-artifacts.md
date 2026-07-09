@@ -2,63 +2,56 @@
 
 SOCRATES/Atlas LES forcing files are distributed separately from this repository and registered as [Julia artifacts](https://pkgdocs.julialang.org/v1/artifacts/).
 
-## Download entry points
+## Getting the data
+
+The Atlas files are registered as **lazy artifacts** (`Artifacts.toml`), so they download and cache automatically on first use — `open_atlas_les_input`, `get_column_forcing`, etc. fetch them via `LazyArtifacts`. No manual download step is required.
+
+For raw retrieval into a directory of your choice (e.g. to inspect or mirror the originals from the Box / UW mirrors), use the download helpers — each takes a positional `destdir`, writes the raw NetCDF (plus the grid text, for inputs) into it, and returns `destdir`:
 
 ```julia
 using SOCRATESSingleColumnForcings: SOCRATESSingleColumnForcings as SSCF
 
-# Atlas SAM *input* files (forcing NetCDF + vertical grid text)
-SSCF.download_atlas_les_inputs(
-    flight_numbers = [1, 9, 10, 11, 12, 13],
-    forcing_types = (:obs_data,),           # and/or (:ERA5_data,)
-)
-
-# Atlas LES *output* files (3D/4D LES fields incl. radiation)
-SSCF.download_atlas_les_outputs(
-    flight_numbers = [1, 9, 10, 11, 12, 13],
-    forcing_types = (:obs_data, :ERA5_data),
-)
+SSCF.download_atlas_les_inputs("/path/to/dir"; flight_numbers = [1, 9], forcing_types = (:obs_data, :ERA5_data))
+SSCF.download_atlas_les_outputs("/path/to/dir"; flight_numbers = [1, 9])
 ```
-
-Both functions populate the Julia artifact store and return `nothing`. Re-running is idempotent (skips files already present).
 
 Implementation: `Data/Atlas_LES_Profiles/download_atlas_les_profiles.jl` (included from the main module).
 
 ## Artifact registry
 
-`Artifacts.toml` at the repository root defines one input and one output artifact per flight:
+`Artifacts.toml` at the repository root defines one **shared metadata** artifact plus one input and one output artifact per `(flight, forcing)`:
 
-| Artifact name | Flight |
-|---------------|--------|
-| `atlas_les_inputs_rf01_v1` … `atlas_les_inputs_rf13_v1` | RF01, RF09, … RF13 |
-| `atlas_les_outputs_rf01_v1` … `atlas_les_outputs_rf13_v1` | RF01, RF09, … RF13 |
+| Artifact name | Contents |
+|---------------|----------|
+| `atlas_les_metadata_v1` | `SOCRATES_summary.nc` + level grids (`192level-grd.txt`, `320level-grd.txt`) |
+| `atlas_les_inputs_rfNN_{obs,era5}_v1` | one SAM input `.nc` (per flight × forcing) |
+| `atlas_les_outputs_rfNN_{obs,era5}_v1` | one LES output `.nc` (per flight × forcing) |
 
-Resolve paths programmatically:
+Flights are RF01, RF09, RF10, RF11 (ERA5 only), RF12, RF13. Resolve on-disk artifact directories programmatically (lazily downloaded on first call):
 
 ```julia
-SSCF.atlas_les_inputs_root(9; forcing_types = (:obs_data,))
-SSCF.atlas_les_outputs_root(9; forcing_types = (:obs_data,))
+SSCF.atlas_les_inputs_root(9, SSCF.ObsForcing())    # dir holding RF09's obs input .nc
+SSCF.atlas_les_outputs_root(9, SSCF.ObsForcing())
+SSCF.atlas_les_metadata_root()                      # dir holding SOCRATES_summary.nc + level grids
 ```
 
 ## File layout (inside an artifact)
 
-### Input artifacts
+Each per-`(flight, forcing)` artifact holds a single `.nc` at its root:
 
 ```
-Input_Data/
-  RF09_grd.txt                              # vertical grid [m]
-  RF09_obs-based_SAM_input.nc               # Obs forcing
-  RF09_ERA5-based_SAM_input_mar18_2022.nc   # ERA5 forcing
+atlas_les_inputs_rf09_obs_v1/    RF09_obs-based_SAM_input.nc
+atlas_les_inputs_rf09_era5_v1/   RF09_ERA5-based_SAM_input_mar18_2022.nc
+atlas_les_outputs_rf09_obs_v1/   RF09_Obs_SOCRATES_128x128_100m_10s_rad10_vg_M2005_aj.nc
 ```
 
-### Output artifacts
+The shared metadata artifact holds the flight summary and both level grids:
 
 ```
-Output_Data/
-  RF09_grd.txt
-  RF09_Obs_SOCRATES_128x128_100m_10s_rad10_vg_M2005_aj.nc
-  RF09_ERA5_SOCRATES_128x128_100m_10s_rad10_vg_M2005_aj.nc
+atlas_les_metadata_v1/   SOCRATES_summary.nc   192level-grd.txt   320level-grd.txt
 ```
+
+A flight's vertical grid is `$(grid_heights[flight])level-grd.txt` (RF01/09/10/11 → 320, RF12/13 → 192).
 
 ## Opening datasets
 

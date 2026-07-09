@@ -3,7 +3,7 @@ Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
 SOCRATESSingleColumnForcings = "efca6b66-9b98-11ed-1a32-7b7cdccd517a"
 
 [sources]
-SOCRATESSingleColumnForcings = {path = ".."}
+SOCRATESSingleColumnForcings = {path = "/net/sampo/data1/jbenjami/Research_Schneider/CliMA/SSCF-0.13.14-backport"}
 
 [compat]
 Documenter = "1"

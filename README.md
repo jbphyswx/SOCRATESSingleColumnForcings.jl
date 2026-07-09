@@ -149,7 +149,7 @@ All interpolation API lives under `SSCF.Interpolation.*` (qualified calls only â
 SSCF.get_surface_reference_state(9, SSCF.ObsForcing(); thermodynamics_backend = tp)
 
 # Time-dependent surface conditions as built interpolants
-SSCF.get_surface_conditions(9, SSCF.ObsForcing(); thermodynamics_backend = tp)
+SSCF.get_surface_forcing(9, SSCF.ObsForcing(); thermodynamics_backend = tp)
 
 # LES reference pressure/density profiles for TurbulenceConvection setup
 SSCF.les_reference_profiles(9; forcing_type = SSCF.ObsForcing())
