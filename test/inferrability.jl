@@ -4,7 +4,7 @@ import JET
 
 # ---------------------------------------------------------------------------
 # Type-stability of the interpolant evaluation hot path (the returned time-splines are evaluated once
-# per model timestep in TC). Each backing (uniform, irregular, SVector) must infer to a concrete
+# per model timestep). Each backing (uniform, irregular, SVector) must infer to a concrete
 # return type with no runtime dispatch (JET `@report_opt` clean).
 # ---------------------------------------------------------------------------
 Test.@testset "hot-path inferrability" begin

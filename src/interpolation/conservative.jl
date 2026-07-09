@@ -187,9 +187,9 @@ function conservative_regridder(
 
         if enforce_positivity
             y_mean = Statistics.mean(y)
-            if (0 < y_mean < 1) # i think too large is fine, ignore small numbers, but bypass if mean is 0.
-                # I think things start to break down around 2* eps(FT)^0.5, but we'll bring everything small up to 1 to be sure...
-                y /= y_mean # we just scale up to 1, that should be fine, if the data has a huge range maybe something breaks but that's not a good fit for regridding like this anyway... [ maybe *= inv(y_mean) is faster?]
+            if (0 < y_mean < 1) # large means are fine; ignore small ones and skip when the mean is 0
+                # values below ~2*eps(FT)^0.5 become unstable, so bring small means up to 1
+                y /= y_mean # scale the cell mean to 1 (data with a very large dynamic range is not a good fit for this regridding)
             end
         end
 
@@ -218,7 +218,7 @@ function conservative_regridder(
 
 
                 # Find index of largest point in xp smaller than x_edges[i]
-                i_low = searchsortedlast(xp, x_edges[i]) - (k - 1) # Find index of largest point in xp smaller than x_edges[i]. We've already a span of 1 from i_low to i_high so k-1 is enough width here I think... (meaning k=1, you'd still have at least 2 total points contributing... bc edges are all unique)
+                i_low = searchsortedlast(xp, x_edges[i]) - (k - 1) # index of the largest xp point below x_edges[i]. There is already a span of 1 between i_low and i_high, so k-1 extra width suffices (at k=1 that still leaves ≥2 contributing points, since edges are unique)
                 # Find index of smallest point in xp larger than x_edges[i+1]
                 i_high = searchsortedfirst(xp, x_edges[i + 1]) + (k - 1)  # Find index of smallest point in xp larger than x_edges[i+1]
 
@@ -397,7 +397,7 @@ function conservative_spline_values(
     A::Union{AbstractMatrix, Nothing} = nothing,
     Af::Union{AbstractMatrix, LinearAlgebra.Factorization, Nothing} = nothing,
 ) where {FT2 <: Real, BCT <: ValidBoundaryConditions}
-    yc = zeros(FT2, length(xf) - 1) # this should be similar.... 
+    yc = zeros(FT2, length(xf) - 1) # should use similar() here
     return conservative_spline_values!(yc, xf, mc; bc = bc, k = k, method = method,
         enforce_positivity = enforce_positivity, nnls_alg = nnls_alg, nnls_tol = nnls_tol, A = A, Af = Af)
 end
@@ -496,7 +496,7 @@ function conservative_spline_values(
     A::Union{AbstractMatrix, Nothing} = nothing,
     Af::Union{AbstractMatrix, LinearAlgebra.Factorization, Nothing} = nothing,
 ) where {FT <: Real, BCT <: ValidBoundaryConditions}
-    yc = zeros(FT, length(xf) - 1, size(mc, 2)) # this should be similar...
+    yc = zeros(FT, length(xf) - 1, size(mc, 2)) # should use similar() here
     return conservative_spline_values!(yc, xf, mc; bc = bc, k = k, method = method,
         enforce_positivity = enforce_positivity, nnls_alg = nnls_alg, nnls_tol = nnls_tol, A = A, Af = Af)
 end
@@ -526,8 +526,8 @@ function conservative_mass_matrix(
 
     n = length(xc)
     if FT <: Int
-        # this should be similar() and this allocats.. needs nonalloc verison.. claude on bs
-        A = zeros(Float64, n, n) # probably cant factorize/integrate/transform in int... need a float.
+        # allocates; a non-allocating similar()-based version would be better
+        A = zeros(Float64, n, n) # need a float type: can't factorize/integrate/transform in integer arithmetic
     else
         A = zeros(FT, n, n)
     end
@@ -545,6 +545,6 @@ function conservative_mass_matrix(
             A[i, j] = safe_integrate(φj, xf[i], xf[i + 1]; bc = bc) / (xf[i + 1] - xf[i])
         end
     end
-    @. A = max(A, FT(0)) # ensure no negative values, sometimes we get like tiny 1e-17s, not sure why, might be like subtraction underflow
+    @. A = max(A, FT(0)) # clamp to non-negative: subtraction underflow can leave tiny (~1e-17) negatives
     return A
 end

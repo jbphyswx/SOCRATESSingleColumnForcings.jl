@@ -1,12 +1,12 @@
 # NEWS
 
-## v0.14.0
+## v0.15.0
 
 Major source reorganization and performance-oriented interpolation storage. **Breaking** for code that called `process_case`, unqualified interpolation symbols, or paths under removed files.
 
 ### Thermodynamics
 
-- Supports `Thermodynamics = "0.11, 0.12, 0.13, 0.14, 0.15"` (via the package extension).
+- Supports `Thermodynamics = "1"` (via the package extension).
 
 ### Package layout
 
@@ -115,7 +115,7 @@ Major source reorganization and performance-oriented interpolation storage. **Br
 
 ## v0.11.1
 
-- Lowered `Integrals.jl` compatibility to keep compatibility with older TurbulenceConvection / CalibrateEDMF stacks.
+- Lowered `Integrals.jl` compatibility to keep compatibility with older downstream stacks.
 
 ## v0.11.0
 
@@ -136,7 +136,7 @@ Major source reorganization and performance-oriented interpolation storage. **Br
 
 ## v0.10.0
 
-- Updated to Thermodynamics 0.11 for newer TurbulenceConvection integration.
+- Updated to Thermodynamics 0.11 for newer downstream integration.
 
 ## v0.9.15
 

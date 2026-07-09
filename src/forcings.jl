@@ -185,12 +185,9 @@ compute(::Val{:subsidence}, base, tb) =
 
 # Working float type from a value storage spec `Tuple{Backing, Eltype}`: the eltype, or `Float64` when the
 # eltype knob is `Nothing` (as-read; NetCDF reads Float64). Drives thermo/A-matrices/materialized arrays.
-_itp_value_eltype(::Type{<:Tuple{Any, Nothing}}) = Float64 # this is supposed to match on disk i thought, or seom reason claude hardcodes to float64
-# _itp_value_eltype(::Type{<:Tuple{Any, E}}) where {E} = E
-# _itp_value_eltype(::Type{T}) where {E,T<:Tuple{Any,E}} = E
+_itp_value_eltype(::Type{<:Tuple{Any, Nothing}}) = Float64 
 _itp_value_eltype(::Type{Tuple{CT,VT}}) where {CT,VT} = VT
 
-# _itp_coord_eltype(::Type{<:Tuple{Nothing, Any}}) = Vector # not sure if this is right
 _itp_coord_eltype(::Type{Tuple{CT,VT}}) where {CT,VT} = CT
 
 
@@ -349,7 +346,7 @@ function get_column_forcing(
                 align_along_dimension(vec.(collect(eachslice(Array(q); dims = time_dim_num))), z_dim_num),
             ) # pg is a scalar-per-column, p is a fixed profile, q slices in z are aligned along time to match pg's shape
         else # Tg > SST, assume SST sets moisture below last known point
-            qg = calc_qg_from_pgTg.(thermodynamics_backend, pg, Tg_orig) ### CHECK BASE VS OFFSET TG ### (Tg_orig too high on RF09, Tg too high on RF10)
+            qg = calc_qg_from_pgTg.(thermodynamics_backend, pg, Tg_orig) # SST (Tg_orig) sets qg below the last known point
         end
 
         p_grid = add_dim(align_along_dimension(p, z_dim_num), time_dim_num)

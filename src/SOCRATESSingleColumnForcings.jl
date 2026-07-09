@@ -31,8 +31,6 @@ function resolve_nan!(x::AbstractArray{FT}, val::FT = FT(0.0)) where {FT}
         x[i] = resolve_nan(x[i], val)
     end
 end
-# resolve_inf(x::FT; val::FT=FT(NaN)) where {FT} = isinf(x) ? val : x # replace inf with NaN
-# resolve_not_finite(x::FT, val = FT(0.0)) where {FT} = !isfinite(x) ? FT(val) : x # replace inf and nan with 0
 
 # --- forcing source -------------------------------------------------------------------------- #
 """
@@ -78,7 +76,7 @@ forcing_key(::ERA5Forcing) = :ERA5_data
 
 # Two cases with shallow cloud-topped boundary layers, RF12 and RF13, are run on a 192-level vertical grid.
 # The other four cases have clouds extending through deeper boundary layers; they are run on a 320-level vertical grid.
-const grid_heights = Base.ImmutableDict(1 => 320, 9 => 320, 10 => 320, 11 => 320, 12 => 192, 13 => 192) # this might be slow idk..
+const grid_heights = Base.ImmutableDict(1 => 320, 9 => 320, 10 => 320, 11 => 320, 12 => 192, 13 => 192)
 
 """
     grid_height(flight_number)

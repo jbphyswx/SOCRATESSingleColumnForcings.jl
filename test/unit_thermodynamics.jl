@@ -3,7 +3,7 @@ using SOCRATESSingleColumnForcings: SOCRATESSingleColumnForcings as SSCF
 
 # ---------------------------------------------------------------------------
 # Unit tests for the default `DefaultThermodynamicsBackend`:
-# Each testset pins a physical property of the fallback backend.
+# Each testset pins a physical property of the default backend.
 # ---------------------------------------------------------------------------
 Test.@testset "Thermodynamics (default backend)" begin
     b = SSCF.DefaultThermodynamicsBackend()

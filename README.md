@@ -8,7 +8,7 @@
 [zenodo-img]: https://zenodo.org/badge/585317234.svg
 [zenodo-latest-url]: https://doi.org/10.5281/zenodo.14945665
 
-Julia package for building **single-column forcings** from the [SOCRATES](https://doi.org/10.1029/2019JD031915) field campaign, using the LES input/output datasets published by [Atlas (2020)](https://doi.org/10.1029/2020MS002205). The primary consumer is the CliMA EDMF single-column model ([TurbulenceConvection.jl](https://github.com/CliMA/TurbulenceConvection.jl)), but the package is usable on its own for reading Atlas data, regridding profiles, and building allocation-free time interpolants.
+Julia package for building **single-column forcings** from the [SOCRATES](https://doi.org/10.1029/2019JD031915) field campaign, using the LES input/output datasets published by [Atlas (2020)](https://doi.org/10.1029/2020MS002205). It reads Atlas data, regrids profiles, and builds allocation-free time interpolants for driving single-column models.
 
 ## What it does
 
@@ -33,7 +33,7 @@ Pkg.add(url="https://github.com/jbphyswx/SOCRATESSingleColumnForcings.jl")
 
 **Requirements:** Julia ≥ 1.10. Core deps: `NCDatasets`, `StaticArrays`, stdlibs.
 
-**Recommended optional deps** (loaded as [package extensions](https://pkgdocs.julialang.org/v1/creating-packages/#Conditional-loading-of-code-in-packages-(Extensions))):
+**Optional deps** (loaded as [package extensions](https://pkgdocs.julialang.org/v1/creating-packages/#Conditional-loading-of-code-in-packages-(Extensions))):
 
 | Extension | Weakdep | Purpose |
 |-----------|---------|---------|
@@ -122,7 +122,7 @@ Built time interpolants store their node/value arrays in caller-selected backing
 # Default: StepRangeLen time axis + Vector{Float64} values
 SSCF.get_column_forcing(9, SSCF.ObsForcing(); thermodynamics_backend = tp)
 
-# Fast uniform time axis + Float32 values (recommended for production)
+# Fast uniform time axis + Float32 values
 SSCF.get_column_forcing(
     9, SSCF.ObsForcing(),
     SSCF.supported_forcing_variables,
@@ -151,7 +151,7 @@ SSCF.get_surface_reference_state(9, SSCF.ObsForcing(); thermodynamics_backend = 
 # Time-dependent surface conditions as built interpolants
 SSCF.get_surface_forcing(9, SSCF.ObsForcing(); thermodynamics_backend = tp)
 
-# LES reference pressure/density profiles for TurbulenceConvection setup
+# LES reference pressure/density profiles
 SSCF.les_reference_profiles(9; forcing_type = SSCF.ObsForcing())
 
 # Low-level I/O
@@ -219,7 +219,7 @@ src/
   interpolation/                    # self-contained Interpolation submodule
   open_atlas_les_inputs.jl          # Atlas input I/O
   open_atlas_les_outputs.jl         # Atlas LES output I/O
-  les_reference_profiles.jl         # p/ρ reference profiles for TC.jl
+  les_reference_profiles.jl         # p/ρ reference profiles
 ext/                                # optional-backend extensions
 Data/Atlas_LES_Profiles/            # download script + upstream links
 test/                               # unit + integration tests

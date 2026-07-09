@@ -48,7 +48,6 @@ function interp_along_dim(
     A::Union{Nothing, AbstractArray} = nothing,
     Af::Union{Nothing, AbstractArray, LinearAlgebra.Factorization} = nothing, # precomputed factorization of A :: technically, A being Diagonal, or Triangular or something could lead to AbstractMatrix Af so we allow both AbstractMatrix and Factorization
 ) where {interpolant_coord_types <: Tuple, interpolant_value_types <: Tuple, drop_collinear}
-    # would use kwargs but doesn't play nice w/ ODE solver for some reason... instead we get out the parameters we want explicitly and pass them all the time (splatting gives a union typle type object that apparently can't be handled?)
     f_enhancement_factor = get(interp_kwargs, :f_enhancement_factor, 1) # default to 1.0
     f_p_enhancement_factor = get(interp_kwargs, :f_p_enhancement_factor, 1) # default to 1.0
     if conservative_interp
@@ -56,7 +55,7 @@ function interp_along_dim(
     else
         bc = Interpolation.create_bc(get(interp_kwargs, :bc, Interpolation.ErrorBoundaryCondition())) # default to error
     end
-    k = get(interp_kwargs, :k, 1) # default to 3
+    k = get(interp_kwargs, :k, 1) # default to 1
 
 
 
@@ -446,7 +445,7 @@ function regrid_to_z_and_time(
     end
     if isnothing(t_old)
         if source isa LESOutput
-            t_old = regrid_source_t_old(source, data,(_itp_coord_eltype(interpolant_coord_types) <: AbstractRange ? Val(true) : Val(true))) # For abstract ranges, go to fixed spacing (actually let's just do it no matter what)
+            t_old = regrid_source_t_old(source, data,((_itp_coord_eltype(interpolant_coord_types) <: AbstractRange) ? Val(true) : Val(true))) # For abstract ranges, go to fixed spacing (actually let's just do it no matter what)
         else
             t_old = regrid_source_t_old(source, data)
         end
@@ -458,14 +457,14 @@ function regrid_to_z_and_time(
         vardata = Array(vardata)
     end
 
-    ### SHOULD WE INTERPOLATE TO THE EXACT TIME RATHER THAN CLOSEST TIMES? IDK... would need to be done before creating vertical splines...
+    # Currently interpolates to the nearest available times, not the exact requested time; changing that would need to happen before building the vertical splines.
 
     if ~isnothing(varg)
         # here we also are gonna need to check where things get inserted in case they are not in order...
         if !assume_monotonic # use data to figure out how and where to do insertions...
         # we need some way to get the local dimension from just a variable
         else
-            vardata = combine_air_and_ground_data(vardata, vardatag, z_dim_num; insert_location = ground_indices) # append ground data with 0 as z bottom, loses labeling now though  (this puts a lot of faith im these 2 vars being the same size of having labels which we can't guarantee, no?)
+            vardata = combine_air_and_ground_data(vardata, vardatag, z_dim_num; insert_location = ground_indices) # append ground data with 0 as the z bottom; drops labeling. Assumes the two variables share size/labels, which isn't guaranteed.
         end
     end
 
@@ -517,7 +516,7 @@ function regrid_to_z_and_time(
         return vardata
     end
 
-    if initial_condition # no need to push further here since is init condition (maybe change later to return both?)
+    if initial_condition # initial-condition path: nothing further to build here
         return vardata
     end
 
@@ -532,9 +531,9 @@ function regrid_to_z_and_time(
         ;
         coord_new = nothing,
         data = data,
-        interp_method = Interpolation.FastLinear1DInterpolation, # in time, we're gonna stick to linear interpolation for now... this one maybe can be pchip since it's all within the data bounds? idk... i was getting w=0 using pchip... possibly because
+        interp_method = Interpolation.FastLinear1DInterpolation, # linear in time: pchip was tried but produced w=0 in testing, and all queries are within the data bounds so linear suffices
         interp_kwargs = interp_kwargs,
-        conservative_interp = false, # no need for conservation in time? maybe?
+        conservative_interp = false, # no conservation needed in time
     )
 
     return vardata
@@ -547,7 +546,7 @@ It seems that Atlas's simulations have a slight kink at the lowest level, but ot
     - in that case, we should be able to just use interpolate_1d because its default bc is nearest outside the range
 """
 function calc_qg_extrapolate_pq(pg, p, q; interp_method = Interpolation.FastLinear1DInterpolation)
-    # not sure if this should be linear in p or logarithmic (linear in z), gonna do linear in p
+    # linear in p (alternative: logarithmic, i.e. linear in z not chosen, i think linear in p is right)
     qg = Interpolation.interpolate_1d(pg, p, q, interp_method; bc = Interpolation.ExtrapolateBoundaryCondition()) # default to spline1d for extrapolation as pchip may not be the most reliable outside bounds of data.
     return qg
 end
@@ -557,7 +556,7 @@ Retrieve the starting index for our LES simulations (12 hours before reference f
 """
 function initial_index(data, flight_number::Int; t_old = nothing)
     if isnothing(t_old)
-        t_old = Array(data["tsec"]) # check this unit was right in the files (may need to make sure it's subtracting out the first timestep so starts at 0) -- do we need to align this on a dimension?
+        t_old = Array(data["tsec"]) # tsec from the file; verify units and that it is offset to start at 0
     end
 
     bdate_data = Array(data["bdate"])

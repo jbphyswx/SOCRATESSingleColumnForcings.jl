@@ -1,6 +1,6 @@
 # SOCRATESSingleColumnForcings.jl
 
-SOCRATESSingleColumnForcings.jl builds **single-column forcings** from the [SOCRATES](https://doi.org/10.1029/2019JD031915) field campaign using the LES input/output datasets published by [Atlas (2020)](https://doi.org/10.1029/2020MS002205). The primary consumer is the CliMA EDMF single-column model ([TurbulenceConvection.jl](https://github.com/CliMA/TurbulenceConvection.jl)).
+SOCRATESSingleColumnForcings.jl builds **single-column forcings** from the [SOCRATES](https://doi.org/10.1029/2019JD031915) field campaign using the LES input/output datasets published by [Atlas (2020)](https://doi.org/10.1029/2020MS002205). It reads Atlas data, regrids profiles, and builds allocation-free time interpolants for driving single-column models.
 
 ## What it does
 

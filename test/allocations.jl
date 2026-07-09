@@ -2,7 +2,7 @@ using Test: Test
 using SOCRATESSingleColumnForcings: SOCRATESSingleColumnForcings as SSCF
 
 # ---------------------------------------------------------------------------
-# The interpolant evaluation is the TC per-timestep hot path and must be allocation-free for every
+# The interpolant evaluation is the per-timestep hot path and must be allocation-free for every
 # backing (SVector = isbits/stack, and Vector on both uniform O(1) and irregular search paths). The
 # function barrier `_eval` keeps the measurement free of global-scope boxing; each interpolant is
 # warmed up (compiled) before `@allocated`.

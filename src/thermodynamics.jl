@@ -30,7 +30,7 @@ passing its parameter set as `thermodynamics_backend`.
 """
 struct DefaultThermodynamicsBackend <: AbstractThermodynamicsBackend end
 
-# --- generic mthods: declared here, methods added per backend (default below; accurate in the ext) --
+# --- generic methods: declared here, methods added per backend (default below; extension backends add theirs) --
 """Equilibrium condensate partition `(q_liq, q_ice)` from `(T, p, q_tot)`."""
 function equilibrium_condensate end
 """Moist air density [kg/m³]."""
@@ -51,11 +51,10 @@ function calc_qg_from_pgTg end
 function saturation_q_tot_from_pgTg end
 
 # ============================================================================================ #
-# Naive backend physics (`DefaultThermodynamicsBackend`).
+# Default backend physics (`DefaultThermodynamicsBackend`).
 #
-# Deliberately simple, dependency-free approximations — a usable fallback, not a replacement for
-# `Thermodynamics.jl`. NOT exercised by the TC checksum path (which always passes a
-# `ThermodynamicsParameters`); the accurate methods live in the extension.
+# Dependency-free ideal-gas / Clausius–Clapeyron approximations, used when no thermodynamics
+# extension is loaded. A loaded extension backend defines these methods on its own parameter set.
 # ============================================================================================ #
 
 # Physical constants (SI), returned as `Float64`; functions convert to the working `FT`.
@@ -249,7 +248,7 @@ end
 """
     saturation_adjust_pθq(backend, p, θ_liq_ice, q_tot) -> (T, q_liq, q_ice)
 
-Naive saturation adjustment: bisection on temperature so that
+Saturation adjustment by bisection on temperature so that
 `liquid_ice_pottemp(backend, T, p, q_tot) == θ_liq_ice`.
 """
 function saturation_adjust_pθq(backend::DefaultThermodynamicsBackend, p::FT, θ_liq_ice::FT, q_tot::FT; 

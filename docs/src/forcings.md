@@ -191,9 +191,9 @@ Per-field kwargs override defaults via `output_interp_kwargs(Val(:symbol))`:
 
 Positivity enforcement (`enforce_positivity` in conservative kwargs) requires the `NonNegLeastSquares` extension and applies only to `:H_nudge` and `:qt_nudge`.
 
-## TurbulenceConvection integration sketch
+## Integration sketch
 
-Typical TC driver pattern:
+Typical single-column driver pattern:
 
 1. `les_reference_profiles` → initial `p`, `ρ` on column grid
 2. `get_column_forcing` → nudging / advection / subsidence interpolants

@@ -41,7 +41,7 @@ SSCF.download_atlas_les_outputs("/path/to/dir"; flight_numbers = [9])  # LES out
 
 Equilibrium-derived quantities (`H_nudge`, saturation-adjusted `T`, condensate-aware density) require a thermodynamics backend.
 
-**Accurate path** (recommended for production / TurbulenceConvection):
+**Thermodynamics.jl extension** — load `Thermodynamics` and construct a parameter set:
 
 ```julia
 using Thermodynamics: Thermodynamics as TD
@@ -52,7 +52,7 @@ tp = TD.Parameters.ThermodynamicsParameters(CP.create_toml_dict(FT))
 
 Loading `Thermodynamics` activates `SOCRATESSingleColumnForcingsThermodynamicsExt`.
 
-**Fallback path** (no Thermodynamics dep; naive ideal-gas physics):
+**Default backend** (no Thermodynamics dependency; ideal-gas physics):
 
 ```julia
 tb = SSCF.DefaultThermodynamicsBackend()
@@ -149,7 +149,7 @@ surf = SSCF.get_surface_forcing(9, SSCF.ObsForcing(); thermodynamics_backend = t
 # surf.pg(t), surf.Tg(t), surf.Tsfc(t), surf.qg(t), surf.qsfc(t)
 ```
 
-## 7. LES reference profiles (TurbulenceConvection setup)
+## 7. LES reference profiles
 
 ```julia
 profiles = SSCF.les_reference_profiles(9; forcing_type = SSCF.ObsForcing())
@@ -171,7 +171,7 @@ julia --project=test test/runtests.jl no_integration
 | `Missing input file …` | Artifact not downloaded | `download_atlas_les_inputs(...)` |
 | `unsupported forcing variable` | Typo in `forcing_variables` tuple | Use symbols from `supported_forcing_variables` |
 | `UniformRange requires an exactly-uniform axis` | Time axis has Float32 jitter | Use `UniformRange` only on exact grids, or use `StepRangeLen` / `Vector` |
-| Naive θ\_liq\_ice values | `DefaultThermodynamicsBackend` | Load `Thermodynamics` and pass `ThermodynamicsParameters` |
+| Approximate θ\_liq\_ice values | `DefaultThermodynamicsBackend` | Load `Thermodynamics` and pass `ThermodynamicsParameters` |
 | `:dTdt_rad` errors | LES output missing | `download_atlas_les_outputs(...)` |
 
 ## Next steps

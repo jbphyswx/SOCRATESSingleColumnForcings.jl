@@ -175,7 +175,7 @@ Test.@testset "Interpolation method unit tests" begin
     #   var_to_new_coord: lazy-broadcast input (simulates DiskArray arithmetic)
     # ------------------------------------------------------------------
     Test.@testset "var_to_new_coord: lazy broadcast (simulated BroadcastDiskArray) does not crash" begin
-        # Simulate the production code pattern where omega has one flagged (SSCF.Interpolation.FastLinear1DInterpolationissing) measurement:
+        # Simulate the production code pattern where omega has one flagged (missing) measurement:
         #   measurment at z=2, t=1 is missing  →  arithmetic keeps Union{Missing,Float64} type
         omega_nc = Union{Missing, Float64}[10.0 40.0; missing 50.0; 30.0 60.0]
         rho_nc   = Union{Missing, Float64}[1.2 1.2; 1.1 1.1; 1.0 1.0]
