@@ -11,7 +11,7 @@ For raw retrieval into a directory of your choice (e.g. to inspect or mirror the
 ```julia
 using SOCRATESSingleColumnForcings: SOCRATESSingleColumnForcings as SSCF
 
-SSCF.download_atlas_les_inputs("/path/to/dir"; flight_numbers = [1, 9], forcing_types = (:obs_data, :ERA5_data))
+SSCF.download_atlas_les_inputs("/path/to/dir"; flight_numbers = [1, 9], forcing_types = (:Obs_data, :ERA5_data))
 SSCF.download_atlas_les_outputs("/path/to/dir"; flight_numbers = [1, 9])
 ```
 
@@ -64,7 +64,7 @@ inp = SSCF.open_atlas_les_input(9, SSCF.ObsForcing())
 out = SSCF.open_atlas_les_output(9, SSCF.ObsForcing())
 
 # Both sources at once
-both_in = SSCF.open_atlas_les_input(9)   # obs_data, ERA5_data, grid_data
+both_in = SSCF.open_atlas_les_input(9)   # Obs_data, ERA5_data, grid_data
 both_out = SSCF.open_atlas_les_output(9)
 
 # Grid only
@@ -78,7 +78,7 @@ Keyword `open_files = false` returns file paths instead of opened datasets (usef
 | Concept | API |
 |---------|-----|
 | Dispatch type | `ObsForcing()`, `ERA5Forcing()` |
-| Artifact/data key | `forcing_key(ft)` → `:obs_data` or `:ERA5_data` |
+| Artifact/data key | `forcing_key(ft)` → `:Obs_data` or `:ERA5_data` |
 | Short label | `symbol(ft)` → `:Obs` or `:ERA5` |
 
 ## Data provenance

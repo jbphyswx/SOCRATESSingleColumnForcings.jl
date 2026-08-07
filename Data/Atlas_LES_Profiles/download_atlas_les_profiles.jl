@@ -212,23 +212,23 @@ const SOCRATES_LES_outputs_Box_links = Dict{String, String}( # We have to save e
 # ---------------------------------------------------------------------------------------------------
 
 """
-    download_atlas_les_inputs(destdir; flight_numbers, forcing_types = (:obs_data, :ERA5_data))
+    download_atlas_les_inputs(destdir; flight_numbers, forcing_types = (:Obs_data, :ERA5_data))
 
 Download the raw Atlas LES *input* files (per forcing `.nc` + level grids) from Box into `destdir`.
 """
 function download_atlas_les_inputs(
     destdir::AbstractString;
     flight_numbers::Union{AbstractArray{Int}, Tuple{Vararg{Int}}} = flight_numbers,
-    forcing_types::Union{AbstractArray{Symbol}, Tuple{Vararg{Symbol}}} = (:obs_data, :ERA5_data),
+    forcing_types::Union{AbstractArray{Symbol}, Tuple{Vararg{Symbol}}} = (:Obs_data, :ERA5_data),
     SOCRATES_LES_inputs_Box_links::Dict{String, String} = SOCRATES_LES_inputs_Box_links,
 )
     mkpath(destdir)
     for flight in flight_numbers
         RF_num = _rf_num(flight)
         for forcing_type in forcing_types
-            fn = forcing_type === :obs_data ? RF_num * "_obs-based_SAM_input.nc" :
+            fn = forcing_type === :Obs_data ? RF_num * "_obs-based_SAM_input.nc" :
                  forcing_type === :ERA5_data ? RF_num * "_ERA5-based_SAM_input_mar18_2022.nc" :
-                 error("forcing_type must be :obs_data or :ERA5_data")
+                 error("forcing_type must be :Obs_data or :ERA5_data")
             urls = (get(SOCRATES_LES_inputs_Box_links, fn, nothing), uw_atlas_base_url * fn)
             _download_first(urls, joinpath(destdir, fn)) || @warn "input not found on Box/UW: $fn"
         end
@@ -240,14 +240,14 @@ function download_atlas_les_inputs(
 end
 
 """
-    download_atlas_les_outputs(destdir; flight_numbers, forcing_types = (:obs_data, :ERA5_data))
+    download_atlas_les_outputs(destdir; flight_numbers, forcing_types = (:Obs_data, :ERA5_data))
 
 Download the raw Atlas LES *output* files from Box into `destdir`.
 """
 function download_atlas_les_outputs(
     destdir::AbstractString;
     flight_numbers::Union{AbstractArray{Int}, Tuple{Vararg{Int}}} = flight_numbers,
-    forcing_types::Union{AbstractArray{Symbol}, Tuple{Vararg{Symbol}}} = (:obs_data, :ERA5_data),
+    forcing_types::Union{AbstractArray{Symbol}, Tuple{Vararg{Symbol}}} = (:Obs_data, :ERA5_data),
     SOCRATES_LES_outputs_Box_links::Dict{String, String} = SOCRATES_LES_outputs_Box_links,
 )
     mkpath(destdir)
@@ -255,8 +255,8 @@ function download_atlas_les_outputs(
     for flight in flight_numbers
         RF_num = _rf_num(flight)
         for forcing_type in forcing_types
-            tag = forcing_type === :obs_data ? "obs" : forcing_type === :ERA5_data ? "ERA5" :
-                  error("forcing_type must be :obs_data or :ERA5_data")
+            tag = forcing_type === :Obs_data ? "obs" : forcing_type === :ERA5_data ? "ERA5" :
+                  error("forcing_type must be :Obs_data or :ERA5_data")
             fn = RF_num * "_" * tag * suffix
             urls = (get(SOCRATES_LES_outputs_Box_links, fn, nothing), uw_atlas_base_url * RF_num * "_output/" * lowercase(tag) * "/SOCRATES_128x128_100m_10s_rad10_vg_M2005_aj.nc")
             _download_first(urls, joinpath(destdir, fn)) || @warn "output not found on Box/UW: $fn"
