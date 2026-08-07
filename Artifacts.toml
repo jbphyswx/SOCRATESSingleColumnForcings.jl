@@ -1,10 +1,10 @@
 [atlas_les_metadata_v1]
-git-tree-sha1 = "a21a8abad479d35613323cdd98b25a976870ceea"
+git-tree-sha1 = "a02a031234146726861997bbe5be01b3cf5cba1b"
 lazy = true
 
     [[atlas_les_metadata_v1.download]]
-    url = "https://github.com/jbphyswx/SOCRATESSingleColumnForcings.jl/releases/download/data-v1/atlas_les_metadata_v1.tar.gz"
-    sha256 = "ff2c111f850223e47bd93db49df2d7073d388208d61808c8a936968fff6d84a7"
+    url = "https://github.com/jbphyswx/SOCRATESSingleColumnForcings.jl/releases/download/data-v1.1/atlas_les_metadata_v1.tar.gz"
+    sha256 = "38855316af0b0ccd63078ca027ae8ac425fc521d4fb80846c80d06859b6a6945"
 
 [atlas_les_inputs_rf01_obs_v1]
 git-tree-sha1 = "f075d1a44ef14cdc4525e00c52506f1892597c38"

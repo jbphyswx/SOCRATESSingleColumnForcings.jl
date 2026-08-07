@@ -23,7 +23,7 @@ Implementation: `Data/Atlas_LES_Profiles/download_atlas_les_profiles.jl` (includ
 
 | Artifact name | Contents |
 |---------------|----------|
-| `atlas_les_metadata_v1` | `SOCRATES_summary.nc` + level grids (`192level-grd.txt`, `320level-grd.txt`) |
+| `atlas_les_metadata_v1` | `SOCRATES_summary.nc` + shared level grids (`192level-grd.txt`, `320level-grd.txt`) + RF09's distinct `RF09_grd.txt` |
 | `atlas_les_inputs_rfNN_{obs,era5}_v1` | one SAM input `.nc` (per flight × forcing) |
 | `atlas_les_outputs_rfNN_{obs,era5}_v1` | one LES output `.nc` (per flight × forcing) |
 
@@ -32,7 +32,7 @@ Flights are RF01, RF09, RF10, RF11 (ERA5 only), RF12, RF13. Resolve on-disk arti
 ```julia
 SSCF.atlas_les_inputs_root(9, SSCF.ObsForcing())    # dir holding RF09's obs input .nc
 SSCF.atlas_les_outputs_root(9, SSCF.ObsForcing())
-SSCF.atlas_les_metadata_root()                      # dir holding SOCRATES_summary.nc + level grids
+SSCF.atlas_les_metadata_root()                      # dir holding SOCRATES_summary.nc + LES grids
 ```
 
 ## File layout (inside an artifact)
@@ -45,13 +45,20 @@ atlas_les_inputs_rf09_era5_v1/   RF09_ERA5-based_SAM_input_mar18_2022.nc
 atlas_les_outputs_rf09_obs_v1/   RF09_Obs_SOCRATES_128x128_100m_10s_rad10_vg_M2005_aj.nc
 ```
 
-The shared metadata artifact holds the flight summary and both level grids:
+The shared metadata artifact holds the flight summary, the two shared level grids, and RF09's
+distinct stretched grid:
 
 ```
-atlas_les_metadata_v1/   SOCRATES_summary.nc   192level-grd.txt   320level-grd.txt
+atlas_les_metadata_v1/
+    SOCRATES_summary.nc
+    192level-grd.txt
+    320level-grd.txt
+    RF09_grd.txt
 ```
 
-A flight's vertical grid is `$(grid_heights[flight])level-grd.txt` (RF01/09/10/11 → 320, RF12/13 → 192).
+RF09 uses `RF09_grd.txt` because its 320-level LES grid extends from 25 m to 6047.79 m. RF01,
+RF10, and RF11 use `320level-grd.txt`; RF12 and RF13 use `192level-grd.txt`. The
+`grid_heights` / `grid_height` APIs report the number of levels, not a grid-file identity.
 
 ## Opening datasets
 

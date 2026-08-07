@@ -72,6 +72,27 @@ Test.@testset "SOCRATESSingleColumnForcings integration" begin
             false
         end
 
+    Test.@testset "flight grid matches the native LES output grid" begin
+        n = 0
+        for fl in SSCF.flight_numbers
+            forcing_type = findfirst(ft -> les_present(fl, ft), SSCF.forcing_types)
+            isnothing(forcing_type) && continue
+            ft = SSCF.forcing_types[forcing_type]
+
+            grid = SSCF.open_atlas_les_grid(fl).grid_data
+            les_z = vec(Array(SSCF.open_atlas_les_output(fl, ft).data["z"]))
+
+            Test.@test length(grid) == SSCF.grid_height(fl)
+            Test.@test maximum(abs.(grid .- les_z)) ≤ 1e-3
+            expected_filename =
+                fl == 9 ? "RF09_grd.txt" : string(SSCF.grid_height(fl)) * "level-grd.txt"
+            Test.@test basename(SSCF.atlas_grid_file(fl)) == expected_filename
+            fl == 9 && Test.@test maximum(grid) > 6000
+            n += 1
+        end
+        Test.@test n > 0
+    end
+
     Test.@testset "get_column_forcing: full field set incl. dTdt_rad — every present flight/forcing" begin
         n = 0
         for fl in SSCF.flight_numbers, ft in SSCF.forcing_types
