@@ -63,10 +63,10 @@ symbol(::ERA5Forcing) = :ERA5
 """
     forcing_key(forcing_type)
 
-The `:obs_data` / `:ERA5_data` symbol that keys the data group and the artifact/download layer —
+The `:Obs_data` / `:ERA5_data` symbol that keys the data group and the artifact/download layer —
 distinct from the `:Obs` / `:ERA5` label returned by [`symbol`](@ref).
 """
-forcing_key(::ObsForcing) = :obs_data
+forcing_key(::ObsForcing) = :Obs_data
 forcing_key(::ERA5Forcing) = :ERA5_data
 
 """Whether `flight_number` is valid for the given forcing source."""

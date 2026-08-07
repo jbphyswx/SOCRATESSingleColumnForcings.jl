@@ -1,5 +1,12 @@
 # NEWS
 
+## v0.14.1
+
+- Fixed RF09's default vertical grid to use its native 320-level LES height coordinate
+  (`25–6047.79 m`) instead of the shorter shared 320-level grid used by RF01, RF10, and RF11.
+- The `atlas_les_metadata_v1` artifact now includes `RF09_grd.txt`; other flights continue to use
+  the shared `192level-grd.txt` or `320level-grd.txt`.
+
 ## v0.14.0
 
 Major source reorganization and performance-oriented interpolation storage. **Breaking** for code that called `process_case`, unqualified interpolation symbols, or paths under removed files.

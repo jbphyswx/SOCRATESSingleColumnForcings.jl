@@ -27,18 +27,18 @@ function open_atlas_les_input(flight_number::Integer, forcing_type::AbstractForc
 end
 
 function _open_atlas_les_input(flight_number::Integer, open_files_val::Val{open_files}, include_grid_val::Val{include_grid}) where {open_files, include_grid}
-    obs_data = _open_atlas_les_input(flight_number, ObsForcing(), open_files_val, Val(false)).data
+    Obs_data = _open_atlas_les_input(flight_number, ObsForcing(), open_files_val, Val(false)).data
     ERA5_data = _open_atlas_les_input(flight_number, ERA5Forcing(), open_files_val, Val(false)).data
-    include_grid || return (; obs_data, ERA5_data)
+    include_grid || return (; Obs_data, ERA5_data)
     grid_filename = atlas_grid_file(flight_number)   # shared metadata artifact
     grid_data = isfile(grid_filename) ? (open_files ? vec(DelimitedFiles.readdlm(grid_filename, Float64)) : grid_filename) : error("Missing grid file $grid_filename")
-    return (; obs_data, ERA5_data, grid_data)
+    return (; Obs_data, ERA5_data, grid_data)
 end
 
 """
     open_atlas_les_input(flight_number; open_files=true, include_grid=true)
 
-Convenience multi-source load: returns `(; obs_data, ERA5_data, grid_data)`.
+Convenience multi-source load: returns `(; Obs_data, ERA5_data, grid_data)`.
 """
 function open_atlas_les_input(flight_number::Integer; open_files::Bool = true, include_grid::Bool = true)
     return _open_atlas_les_input(flight_number, Val(open_files), Val(include_grid))

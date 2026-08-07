@@ -30,8 +30,8 @@ end
 _rf_num(flight::Int) = "RF" * string(flight, pad = 2)
 
 # Artifact names: one per (flight, forcing) for the input & output forcing `.nc` files, plus a single
-# shared metadata artifact holding `SOCRATES_summary.nc` + the two unique level grids. Each is declared
-# as a lazy download artifact in the package `Artifacts.toml` (no data is duplicated across artifacts).
+# shared metadata artifact holding `SOCRATES_summary.nc`, the two shared level grids, and RF09's
+# distinct 320-level grid. Each is declared as a lazy download artifact in the package `Artifacts.toml`.
 _forcing_tag(::ObsForcing) = "obs"
 _forcing_tag(::ERA5Forcing) = "era5"
 _inputs_artifact_name(flight::Int, ft::AbstractForcingType) =
@@ -79,16 +79,25 @@ atlas_les_outputs_root(flight::Int, forcing_type::AbstractForcingType) =
 """
     atlas_les_metadata_root()
 
-On-disk directory of the shared metadata artifact: `SOCRATES_summary.nc` + the two level grids
-(`192level-grd.txt`, `320level-grd.txt`). A flight's grid is `\$(grid_heights[flight])level-grd.txt`.
+On-disk directory of the shared metadata artifact: `SOCRATES_summary.nc`, the shared level grids
+(`192level-grd.txt`, `320level-grd.txt`), and RF09's distinct `RF09_grd.txt`.
 """
 atlas_les_metadata_root() = _artifact_root(_metadata_artifact_name)
 
 "Path to `SOCRATES_summary.nc` (in the shared metadata artifact). `flight_number` is accepted for call-site compatibility; the summary is flight-independent."
 atlas_socrates_summary_file(flight_number::Int) = joinpath(atlas_les_metadata_root(), "SOCRATES_summary.nc")
 
-"Path to the level-grid file for `flight` (in the shared metadata artifact), selected via `grid_heights`."
-atlas_grid_file(flight::Int) = joinpath(atlas_les_metadata_root(), string(SSCF.grid_heights[flight]) * "level-grd.txt")
+"""
+    _atlas_grid_filename(flight)
+
+Metadata filename for `flight`'s LES grid. RF09 used a distinct stretched 320-level grid; all other
+flights use one of the two shared grids selected by [`grid_height`](@ref).
+"""
+_atlas_grid_filename(flight::Int) =
+    flight == 9 ? "RF09_grd.txt" : string(SSCF.grid_heights[flight]) * "level-grd.txt"
+
+"Path to the LES grid file for `flight` in the shared metadata artifact."
+atlas_grid_file(flight::Int) = joinpath(atlas_les_metadata_root(), _atlas_grid_filename(flight))
 
 # download forcings for each flight
 
@@ -212,27 +221,27 @@ const SOCRATES_LES_outputs_Box_links = Dict{String, String}( # We have to save e
 # ---------------------------------------------------------------------------------------------------
 
 """
-    download_atlas_les_inputs(destdir; flight_numbers, forcing_types = (:obs_data, :ERA5_data))
+    download_atlas_les_inputs(destdir; flight_numbers, forcing_types = (:Obs_data, :ERA5_data))
 
-Download the raw Atlas LES *input* files (per forcing `.nc` + level grids) from Box into `destdir`.
+Download the raw Atlas LES *input* files (per forcing `.nc` + the selected flight grid) into `destdir`.
 """
 function download_atlas_les_inputs(
     destdir::AbstractString;
     flight_numbers::Union{AbstractArray{Int}, Tuple{Vararg{Int}}} = flight_numbers,
-    forcing_types::Union{AbstractArray{Symbol}, Tuple{Vararg{Symbol}}} = (:obs_data, :ERA5_data),
+    forcing_types::Union{AbstractArray{Symbol}, Tuple{Vararg{Symbol}}} = (:Obs_data, :ERA5_data),
     SOCRATES_LES_inputs_Box_links::Dict{String, String} = SOCRATES_LES_inputs_Box_links,
 )
     mkpath(destdir)
     for flight in flight_numbers
         RF_num = _rf_num(flight)
         for forcing_type in forcing_types
-            fn = forcing_type === :obs_data ? RF_num * "_obs-based_SAM_input.nc" :
+            fn = forcing_type === :Obs_data ? RF_num * "_obs-based_SAM_input.nc" :
                  forcing_type === :ERA5_data ? RF_num * "_ERA5-based_SAM_input_mar18_2022.nc" :
-                 error("forcing_type must be :obs_data or :ERA5_data")
+                 error("forcing_type must be :Obs_data or :ERA5_data")
             urls = (get(SOCRATES_LES_inputs_Box_links, fn, nothing), uw_atlas_base_url * fn)
             _download_first(urls, joinpath(destdir, fn)) || @warn "input not found on Box/UW: $fn"
         end
-        gfn = string(SSCF.grid_heights[flight]) * "level-grd.txt"
+        gfn = _atlas_grid_filename(flight)
         urls = (get(SOCRATES_LES_inputs_Box_links, gfn, nothing), uw_atlas_base_url * gfn)
         _download_first(urls, joinpath(destdir, gfn)) || @warn "grid not found on Box/UW: $gfn"
     end
@@ -240,14 +249,14 @@ function download_atlas_les_inputs(
 end
 
 """
-    download_atlas_les_outputs(destdir; flight_numbers, forcing_types = (:obs_data, :ERA5_data))
+    download_atlas_les_outputs(destdir; flight_numbers, forcing_types = (:Obs_data, :ERA5_data))
 
 Download the raw Atlas LES *output* files from Box into `destdir`.
 """
 function download_atlas_les_outputs(
     destdir::AbstractString;
     flight_numbers::Union{AbstractArray{Int}, Tuple{Vararg{Int}}} = flight_numbers,
-    forcing_types::Union{AbstractArray{Symbol}, Tuple{Vararg{Symbol}}} = (:obs_data, :ERA5_data),
+    forcing_types::Union{AbstractArray{Symbol}, Tuple{Vararg{Symbol}}} = (:Obs_data, :ERA5_data),
     SOCRATES_LES_outputs_Box_links::Dict{String, String} = SOCRATES_LES_outputs_Box_links,
 )
     mkpath(destdir)
@@ -255,8 +264,8 @@ function download_atlas_les_outputs(
     for flight in flight_numbers
         RF_num = _rf_num(flight)
         for forcing_type in forcing_types
-            tag = forcing_type === :obs_data ? "obs" : forcing_type === :ERA5_data ? "ERA5" :
-                  error("forcing_type must be :obs_data or :ERA5_data")
+            tag = forcing_type === :Obs_data ? "obs" : forcing_type === :ERA5_data ? "ERA5" :
+                  error("forcing_type must be :Obs_data or :ERA5_data")
             fn = RF_num * "_" * tag * suffix
             urls = (get(SOCRATES_LES_outputs_Box_links, fn, nothing), uw_atlas_base_url * RF_num * "_output/" * lowercase(tag) * "/SOCRATES_128x128_100m_10s_rad10_vg_M2005_aj.nc")
             _download_first(urls, joinpath(destdir, fn)) || @warn "output not found on Box/UW: $fn"

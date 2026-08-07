@@ -13,7 +13,7 @@ SSCF.ERA5Forcing()  # ERA5-based Atlas SAM input
 
 | Type | Artifact key | Atlas input file tag |
 |------|--------------|----------------------|
-| `ObsForcing()` | `:obs_data` | `obs-based_SAM_input.nc` |
+| `ObsForcing()` | `:Obs_data` | `obs-based_SAM_input.nc` |
 | `ERA5Forcing()` | `:ERA5_data` | `ERA5-based_SAM_input_mar18_2022.nc` |
 
 **Which fields follow `forcing_type`?** Nudging targets (`H_nudge`, `T_nudge`, `qt_nudge`) and advective tendencies (`dTdt_hadv`, `dqtdt_hadv`) come from the chosen input file. Horizontal winds, geostrophic winds, and subsidence are always ERA5-sourced.
