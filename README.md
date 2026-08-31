@@ -26,9 +26,7 @@ The return type is a **concretely typed `NamedTuple`**: each requested field is 
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/jbphyswx/SOCRATESSingleColumnForcings.jl")
-# or, for local development:
-# Pkg.develop(path="/path/to/SOCRATESSingleColumnForcings.jl")
+] add SOCRATESSingleColumnForcings
 ```
 
 **Requirements:** Julia ≥ 1.10. Core deps: `NCDatasets`, `StaticArrays`, stdlibs.
