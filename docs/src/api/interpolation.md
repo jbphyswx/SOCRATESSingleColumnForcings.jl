@@ -42,16 +42,21 @@ NearestBoundaryCondition
 create_bc
 ```
 
-## Node pruning
+## Node pruning and node sets
 
 ```@docs
 drop_collinear_nodes
 coerce_to_shared_nodes
+interpolant_nodes
+rebuild_interpolant
 ```
 
 ## Conservative regridding
 
 ```@docs
+AbstractConservativeIntegrateMethod
+IntegrateMass
+InvertMass
 default_conservative_interp_kwargs
 conservative_regridder
 conservative_mass_matrix

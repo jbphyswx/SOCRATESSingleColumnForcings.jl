@@ -11,9 +11,9 @@ Test.@testset "hot-path inferrability" begin
     I = SSCF.Interpolation
     ext = I.ExtrapolateBoundaryCondition()
 
-    xu = collect(0.0:1.0:40.0); fu = @. sin(xu / 5)              # uniform grid → UniformNodes
+    xu = collect(0.0:1.0:40.0); fu = @. sin(xu / 5)              # Vector coord, uniform values: O(log N) search
     su = I.build_spline(I.FastLinear1DInterpolation, xu, fu; bc = ext, drop_collinear = Val(false))
-    xi = [0.0, 1.0, 3.0, 7.0, 15.0, 31.0]; fi = @. cos(xi / 4)   # irregular grid → IrregularNodes
+    xi = [0.0, 1.0, 3.0, 7.0, 15.0, 31.0]; fi = @. cos(xi / 4)   # Vector coord, irregular values
     si = I.build_spline(I.FastLinear1DInterpolation, xi, fi; bc = ext, drop_collinear = Val(false))
     ss = I.build_spline(I.FastLinear1DInterpolation,           # SVector backing (isbits, alloc-free)
         I.create_svector(collect(0.0:1.0:4.0)), I.create_svector([0.0, 1.0, 4.0, 9.0, 16.0]);

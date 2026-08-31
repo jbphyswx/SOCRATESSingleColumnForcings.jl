@@ -21,6 +21,7 @@ Test.@testset "Thermodynamics comparison: default vs Thermodynamics.jl extension
         press_triple = 611.657, R_d = R_d, R_v = R_v, cp_d = cp_d, cp_v = SSCF.cp_v(b),
         cp_l = SSCF.cp_l(b), cp_i = SSCF.cp_i(b), LH_v0 = SSCF.L_v0(b), LH_s0 = SSCF.L_s0(b),
         entropy_dry_air = 6864.8, entropy_water_vapor = 10513.6, grav = SSCF.grav(b), pow_icenuc = 1.0,
+        q_min = eps(Float64),
         gas_constant = R_universal, molmass_dryair = R_universal / R_d,
         molmass_water = R_universal / R_v, kappa_d = R_d / cp_d,
     )
@@ -37,14 +38,14 @@ Test.@testset "Thermodynamics comparison: default vs Thermodynamics.jl extension
             Test.@test isapprox(SSCF.virtual_temperature(b, T, p, q), SSCF.virtual_temperature(thermo_params, T, p, q); rtol = 5e-3)
             Test.@test isapprox(SSCF.air_density(b, T, p, q), SSCF.air_density(thermo_params, T, p, q); rtol = 3e-2)
             Test.@test isapprox(SSCF.liquid_ice_pottemp(b, T, p, q), SSCF.liquid_ice_pottemp(thermo_params, T, p, q); rtol = 1e-2)
-            Test.@test isapprox(SSCF.q_vap_saturation_liquid(b, T, p), SSCF.q_vap_saturation_liquid(thermo_params, T, p); rtol = 0.15)
+            Test.@test isapprox(SSCF.q_vap_saturation_liq(b, T, p), SSCF.q_vap_saturation_liq(thermo_params, T, p); rtol = 0.15)
         end
     end
 
     Test.@testset "surface humidities agree (~1%)" begin
         for (pg, Tg) in ((1.0e5, 288.0), (9.5e4, 280.0), (1.0e5, 292.0))
-            Test.@test isapprox(SSCF.saturation_q_tot_from_pgTg(b, pg, Tg), SSCF.saturation_q_tot_from_pgTg(thermo_params, pg, Tg); rtol = 3e-2)
-            Test.@test isapprox(SSCF.calc_qg_from_pgTg(b, pg, Tg), SSCF.calc_qg_from_pgTg(thermo_params, pg, Tg); rtol = 3e-2)
+            Test.@test isapprox(SSCF.saturation_mixing_ratio_from_pT(b, pg, Tg), SSCF.saturation_mixing_ratio_from_pT(thermo_params, pg, Tg); rtol = 3e-2)
+            Test.@test isapprox(SSCF.saturation_specific_humidity_from_pT(b, pg, Tg), SSCF.saturation_specific_humidity_from_pT(thermo_params, pg, Tg); rtol = 3e-2)
         end
     end
 

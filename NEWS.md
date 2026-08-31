@@ -1,5 +1,67 @@
 # NEWS
 
+## v0.16.0
+
+**Breaking**, and two fixes move numbers.
+
+### Numbers change
+
+- **Units of LES-archive variables are corrected.** `src/units.jl` now classifies every one of the
+  492 variables the archive carries, recording the authority for each classification. Corrections
+  against the conversions previously in use: the 34 microphysical **number**-process rates are per
+  **kg**, not per cm³ (were off by 1e6); the 43 **mass**-process rates are already `kg/kg/s` in M2005,
+  so no `g→kg` applies (off by 1000); `TQ` and the `QW*` flux-budget terms likewise (1000);
+  `Q2`/`QTSTOR` are moisture rates, not temperature rates; `ZCB2` is a height variance, not a height;
+  `PREC2` is a squared unit and takes the squared factor; `LHFOBS`/`SHFOBS` carry an **undeclared**
+  `-99999` sentinel (the declared `missing_value` is `-9999`) that is now masked to `NaN`.
+- **`:dTdt_rad` moves 150 s later relative to model time 0.** LES statistics are means labelled at
+  their averaging-window *midpoint* — SAM stamps `day - nstat*dt/2/86400`, with `nstat` the steps per
+  write — so the record opens half a period before its first label. Atlas-input fields were already
+  referenced to the run start, so the two sources previously sat half a period apart inside a single
+  returned `NamedTuple`; they now share an origin (`regrid_source_t_origin`).
+
+### Fixed
+
+- **Conservative regridding could silently use another field's mass matrix.** The cache was keyed on
+  the interpolation method type alone, while the matrix also depends on the grid, `k` and the boundary
+  condition — so with a per-field `new_z`, fields on different grids shared one matrix. Replaced by
+  `MassMatrixCache`, keyed on all four.
+- **Surface `qg` used the offset temperature instead of the SST** on flights with a positive
+  `Tg_offset` (RF01, RF10): `Tg_orig` aliased an array that was then mutated in place.
+- **PCHIP supported only one boundary condition** — `build_spline` threw for `Error` and rejected
+  `Nearest`. It now honours all three; `PCHIPExtrapolatedInterpolant` is renamed `PCHIPInterpolant`.
+- Conservative regridding now works for the **Interpolations** backend: `safe_integrate` splits at the
+  knots and applies a Gauss–Legendre rule matched to the spec's polynomial degree, so it is exact.
+- `coerce_to_shared_nodes` works for **all four** backends, via the new `interpolant_nodes` /
+  `rebuild_interpolant` contract verbs; the `Vector`/`SVector`/`NTuple` methods collapsed into one.
+- `UniformRange` is constructible on an integer-seconds axis — the package's own LES time axis.
+- The docs build no longer depends on an absolute path to a worktree that does not exist.
+
+### Changed
+
+- `get_column_forcing` takes `z_regrid_opts::RegriddingOpts` and
+  `t_regrid_opts::RegriddingOpts` in place of `interp_method` / `interp_kwargs` /
+  `conservative_interp` / `conservative_interp_kwargs` / `bc` / `drop_collinear`. Conservative
+  regridding is selected by *holding* a `ConservativeRegridingOpts` rather than by a separate flag, so
+  the settings cannot disagree with whether it is on, and each stage carries its own boundary
+  condition — which is what makes them independently settable.
+- `A_cache` / `Af_cache` → a single `mass_matrix_cache::MassMatrixCache`. The factorization is now
+  `lu` rather than `factorize`, making the stored type concrete; this gives up `factorize`'s choice of
+  a symmetric factorization, which costs nothing here because the mass matrix divides each row by its
+  own cell width and so is not symmetric unless every cell width is equal.
+- `integrate_method` is `IntegrateMass()` / `InvertMass()` rather than `:integrate` / `:invert`.
+- `output_interp_kwargs(Val)` → `output_z_regrid_opts(Val, opts)`.
+- `les_reference_profiles` takes one `z_regrid_opts`.
+- Added `q_vap_saturation_ice` to the thermodynamics contract and the Thermodynamics extension.
+
+### Performance
+
+Allocation work in `get_column_forcing` (baseline 18.46 MiB for 11 fields, **not yet re-measured**):
+slice copies replaced by views, the shared coordinate hoisted out of the per-column loop,
+`combine_air_and_ground_data`'s insert path written into a preallocated output instead of `mapslices`,
+`lev_to_z` no longer building an array of tuples and its column kernel allocating nothing, and the
+evaluate path preallocating its output and using an in-place kernel where the method has one.
+
 ## v0.15.1
 
 - Fixed RF09's default vertical grid to use its native 320-level LES height coordinate

@@ -49,11 +49,9 @@ get_column_forcing(
     use_LES_output_for_z = false,
     return_old_z = false,
     fail_on_missing_data = true,
-    conservative_interp = false,
-    conservative_interp_kwargs = default_conservative_interp_kwargs,
-    drop_collinear = Val(false),
-    A_cache = Dict{DataType, Matrix{FT}}(),
-    Af_cache = Dict{DataType, Factorization{FT}}(),
+    z_regrid_opts = RegriddingOpts(),
+    t_regrid_opts = RegriddingOpts(),
+    mass_matrix_cache = MassMatrixCache{FT}(),
 )
 ```
 
@@ -70,11 +68,43 @@ get_column_forcing(
 | `new_z` | Atlas grid | Target vertical grid (`AbstractVector`) or per-field `NamedTuple` |
 | `initial_condition` | `false` | Return time-0 profiles instead of time splines |
 | `thermodynamics_backend` | `DefaultThermodynamicsBackend()` | Pass `ThermodynamicsParameters` for accurate physics |
-| `conservative_interp` | `false` | Mass-weighted conservative vertical regridding |
-| `conservative_interp_kwargs` | `default_conservative_interp_kwargs` | Per-field enhancement factors, positivity, etc. |
-| `drop_collinear` | `Val(false)` | Prune collinear nodes from built splines (exact, size-reducing) |
+| `z_regrid_opts` | `RegriddingOpts()` | Method, boundary condition and conservative recipe for the regrid onto `new_z` |
+| `t_regrid_opts` | `RegriddingOpts()` | Method, boundary condition and collinear pruning for the returned time splines |
 | `use_LES_output_for_z` | `false` | Derive altitude from LES output instead of hypsometric integration |
-| `A_cache`, `Af_cache` | empty `Dict`s | Reuse conservative mass matrices across fields/calls |
+| `mass_matrix_cache` | `MassMatrixCache{FT}()` | Reuse conservative mass matrices across fields/calls |
+
+### The two regrid stages
+
+Regridding evaluates onto `new_z` and then builds time splines. The two ask different questions, so
+each takes its own options object rather than sharing one bag of keywords:
+
+| | `z_regrid_opts::RegriddingOpts` | `t_regrid_opts::RegriddingOpts` |
+|---|---|---|
+| stage | evaluating onto `new_z` | building the **returned** interpolants |
+| `method` | `FastLinear1DInterpolation` | `FastLinear1DInterpolation` |
+| `bc` answers | a target level outside the source column | a model time outside the forcing record |
+| `bc` default | `ErrorBoundaryCondition()`, or `Extrapolate` when conservative | `ErrorBoundaryCondition()` |
+| also carries | `conservative` (see below) | `drop_collinear` — prune collinear nodes (exact, size-reducing) |
+
+```julia
+forcing = SSCF.get_column_forcing(
+    9, SSCF.ObsForcing();
+    z_regrid_opts = SSCF.RegriddingOpts(; bc = SSCF.Interpolation.ErrorBoundaryCondition()),
+    t_regrid_opts = SSCF.RegriddingOpts(; bc = SSCF.Interpolation.NearestBoundaryCondition()),
+)
+```
+
+Conservative regridding is selected by *holding* a `ConservativeRegridingOpts` rather than by a
+separate flag, so the settings cannot disagree with whether it is on:
+
+```julia
+z_regrid_opts = SSCF.RegriddingOpts(;
+    conservative = SSCF.ConservativeRegridingOpts(; k = 1, f_enhancement_factor = 5),
+)
+```
+
+`get_surface_forcing` takes a single `bc` (it builds time interpolants only, with no vertical stage),
+defaulting to `ExtrapolateBoundaryCondition()`.
 
 ### Storage type parameters
 
@@ -127,7 +157,7 @@ Defined in `supported_forcing_variables`:
 | `:ug_nudge`, `:vg_nudge` | Geostrophic wind | `ug`, `vg` | |
 | `:dTdt_rad` | Radiative heating rate | LES `RADQR` | Requires LES output artifact; K/day → K/s |
 
-Extending outputs: add the symbol to `supported_forcing_variables` and define `compute(::Val{:your_symbol}, base, tb)` (plus `output_source` / `output_interp_kwargs` if non-default).
+Extending outputs: add the symbol to `supported_forcing_variables` and define `compute(::Val{:your_symbol}, base, tb)` (plus `output_source` / `output_z_regrid` if non-default).
 
 ## Surface functions
 
@@ -147,10 +177,11 @@ get_surface_forcing(flight_number, forcing_type,
     interpolant_coord_types = Tuple{StepRangeLen, Nothing},
     interpolant_value_types = Tuple{Vector, Float64};
     thermodynamics_backend = DefaultThermodynamicsBackend(),
-    drop_collinear = Val(false))
+    drop_collinear = Val(false),
+    bc = Interpolation.ExtrapolateBoundaryCondition())
 ```
 
-Returns `(; pg, Tg, Tsfc, qg, qsfc)` — each value a built time interpolant aligned to the model clock (t = 0 at the reference time), with extrapolation boundary conditions. The `Tuple{Backing, Eltype}` storage specs (as in `get_column_forcing`) give type-stable, allocation-free interpolants; the default coordinate spec stores the time axis as a `UniformRange` for O(1) evaluation.
+Returns `(; pg, Tg, Tsfc, qg, qsfc)` — each value a built time interpolant aligned to the model clock (t = 0 at the reference time), with extrapolation boundary conditions. The `Tuple{Backing, Eltype}` storage specs (as in `get_column_forcing`) give type-stable, allocation-free interpolants; the default coordinate spec stores the time axis as a `UniformRange` for O(1) evaluation
 
 ### `get_Tg_offset`
 
@@ -164,13 +195,10 @@ Center/face pressure and density reference profiles on given vertical grids, as 
 les_reference_profiles(flight_number, FT = Float64;
     forcing_type = ObsForcing(),
     new_zc = nothing, new_zf = nothing,
-    interp_method = Interpolation.FastLinear1DInterpolation,
-    interp_kwargs = (; bc = Interpolation.NearestBoundaryCondition()),
-    conservative_interp = false,
-    conservative_interp_kwargs = Interpolation.default_conservative_interp_kwargs)
+    z_regrid_opts = RegriddingOpts(; bc = Interpolation.NearestBoundaryCondition()))
 ```
 
-Default: `new_zf = [0; grid_data]`, `new_zc` at midpoints. Requires LES output for `p`, `ρ`. The vertical regrid uses the same machinery as the forcing profiles — `interp_method` / `interp_kwargs` / `conservative_interp` — via `var_to_new_coord`. An in-place `les_reference_profiles!(p_c, p_f, ρ_c, ρ_f, flight_number; …)` writes into caller-provided buffers (the buffers' element type sets the output type).
+Default: `new_zf = [0; grid_data]`, `new_zc` at midpoints. Requires LES output for `p`, `ρ`. The vertical regrid uses the same machinery as the forcing profiles — one `z_regrid_opts` — via `var_to_new_coord`. An in-place `les_reference_profiles!(p_c, p_f, ρ_c, ρ_f, flight_number; …)` writes into caller-provided buffers (the buffers' element type sets the output type).
 
 ## `default_new_z`
 
@@ -182,9 +210,9 @@ SSCF.default_new_z(9)  # same grid as open_atlas_les_grid
 
 ## Conservative regridding
 
-When `conservative_interp = true`, vertical regridding uses a mass matrix solved via precomputed `A` and its factorization. Caches (`A_cache`, `Af_cache`) keyed by interpolation method type allow reuse across fields and repeated calls.
+When `z_regrid_opts.conservative` is set, vertical regridding uses a mass matrix solved via precomputed `A` and its factorization. `mass_matrix_cache` is keyed by everything the matrix depends on — method, boundary condition, refinement factor `k`, and the target grid.
 
-Per-field kwargs override defaults via `output_interp_kwargs(Val(:symbol))`:
+Per-field options override the caller's `z_regrid_opts` via `output_z_regrid_opts(Val(:symbol), z_regrid_opts)`:
 
 - `:H_nudge`, `:qt_nudge` — higher enhancement factors (preserve sharp inversions)
 - `:subsidence` — gentle smoothing (factor 1)

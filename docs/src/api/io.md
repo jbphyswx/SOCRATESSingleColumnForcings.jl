@@ -26,6 +26,5 @@ open_atlas_les_grid
 ```@docs
 read_profile_at_time
 read_profiles_over_time
-_materialize
 dim_num
 ```

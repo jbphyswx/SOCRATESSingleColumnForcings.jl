@@ -11,8 +11,10 @@ using NonNegLeastSquares: NonNegLeastSquares  # activates the NNLS extension so 
 #                             SSCF_SKIP_INTEGRATION_TESTS=true in the env.
 #   Run only unit tests:      pass "unit" as a test arg.
 #   Run only integration:     pass "integration" as a test arg.
-#   Run specific unit group:  pass "unit_ncdatasets", "unit_shapes",
-#                             "unit_interp", "unit_thermo", or "unit_regrid".
+#   Run specific unit group:  pass any of "unit_ncdatasets", "unit_shapes", "unit_interp",
+#                             "unit_thermo", "unit_thermo_consistency", "unit_regrid",
+#                             "unit_backends", "unit_storage", "unit_bc", "unit_units", "quality",
+#                             "extensions", "inferrability", "allocations".
 # ---------------------------------------------------------------------------
 const _test_args = Set(ARGS)
 
@@ -47,6 +49,18 @@ if _run_unit_group("unit_thermo_consistency")
 end
 if _run_unit_group("unit_regrid")
     include("unit_regrid_source.jl")
+end
+if _run_unit_group("unit_backends")
+    include("unit_backends.jl")
+end
+if _run_unit_group("unit_storage")
+    include("unit_storage.jl")
+end
+if _run_unit_group("unit_bc")
+    include("unit_bc.jl")
+end
+if _run_unit_group("unit_units")
+    include("unit_units.jl")
 end
 if _run_unit_group("quality")
     include("quality.jl")

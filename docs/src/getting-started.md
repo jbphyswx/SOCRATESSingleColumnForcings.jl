@@ -6,13 +6,13 @@ End-to-end workflow: install the package, fetch SOCRATES/Atlas data, build colum
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/CliMA/SOCRATESSingleColumnForcings.jl")
+Pkg.add(url="https://github.com/jbphyswx/SOCRATESSingleColumnForcings.jl")
 ```
 
 For development:
 
 ```bash
-git clone https://github.com/CliMA/SOCRATESSingleColumnForcings.jl.git
+git clone https://github.com/jbphyswx/SOCRATESSingleColumnForcings.jl.git
 cd SOCRATESSingleColumnForcings.jl
 julia --project=. -e 'using Pkg; Pkg.instantiate()'
 ```
@@ -72,7 +72,7 @@ The return value is a `NamedTuple`. Each field is a `Vector` with one built time
 
 ```julia
 new_z = collect(0.0:100.0:4000.0)  # meters
-forcing = SSCF.get_column_forcing(9, SSCF.ObsForcing(), new_z; thermodynamics_backend = tp)
+forcing = SSCF.get_column_forcing(9, SSCF.ObsForcing(); new_z = new_z, thermodynamics_backend = tp)
 ```
 
 Per-field grids are also supported via a `NamedTuple` keyed by forcing variable symbols.
@@ -102,7 +102,7 @@ ic = SSCF.get_column_forcing(
 
 ### Fast storage types
 
-For allocation-free, inferrable evaluation (~4 ns per call on uniform axes):
+For allocation-free, inferrable evaluation on uniform axes:
 
 ```julia
 using StaticArrays

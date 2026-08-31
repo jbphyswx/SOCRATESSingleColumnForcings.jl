@@ -39,17 +39,17 @@ Some sample timings with A = (1000x1000) and tridiagonal (but full matrix type, 
 @btime nonneg_lsq($A, $M; alg=:nnls) evals=2 samples=2  # doesn't support `tol`
     1.027 s (13 allocations: 7.68 MiB)
 
-@btime nonneg_lsq($A, $M; alg=:nnls) evals=2 samples=2 
+@btime nonneg_lsq($A, $M; alg=:nnls) evals=2 samples=2
 
 
-@btime nonneg_lsq($A, $M; alg=:fnnls, tol=1e-12) evals=2 samples=2 
+@btime nonneg_lsq($A, $M; alg=:fnnls, tol=1e-12) evals=2 samples=2
     6.200 s (22914 allocations: 3.71 GiB)
 @btime nonneg_lsq($A, $M; alg=:pivot, tol=1e-8) evals=2 samples=2
     6.258 s (22914 allocations: 3.71 GiB)
 
 
 @btime nonneg_lsq($A, $M; alg=:pivot, tol=1e-8) evals=2 samples=2
-    33.881 ms (48 allocations: 38.25 MiB)     : This is 
+    33.881 ms (48 allocations: 38.25 MiB)     : This is
 @btime nonneg_lsq($A, $M; alg=:nnls, tol=1e-12) evals=2 samples=2
     35.031 ms (48 allocations: 38.25 MiB)
 
@@ -74,6 +74,18 @@ Note if you're doing fully random matrices for A, :pivot was slower, but then th
 =#
 
 """
+How a conservative regrid turns integrated cell masses into node values: [`IntegrateMass`](@ref) or
+[`InvertMass`](@ref).
+"""
+abstract type AbstractConservativeIntegrateMethod end
+
+"""Report each cell's mean of the source spline."""
+struct IntegrateMass <: AbstractConservativeIntegrateMethod end
+
+"""Solve for the node values whose re-spline reproduces the cell masses; less diffusive, preserves peaks."""
+struct InvertMass <: AbstractConservativeIntegrateMethod end
+
+"""
     default_conservative_interp_kwargs
 
 Default keyword bundle for conservative vertical regridding (`preserve_monotonicity`,
@@ -86,11 +98,11 @@ const default_conservative_interp_kwargs = (;
     nnls_alg = :pivot, # should be optimal for most cases, see the discussion above.
     nnls_tol = 1e-8, # default for package
     enforce_conservation = true,
-    integrate_method = :invert,
+    integrate_method = InvertMass(),
 )
 
 const DCIKT = typeof(default_conservative_interp_kwargs)
-const DCIKDT = Dict{Symbol, Union{Bool, Symbol, Float64}} # Dict for conservative interpolation kwargs
+const DCIKDT = Dict{Symbol, Union{Bool, Symbol, Float64, AbstractConservativeIntegrateMethod}} # Dict for conservative interpolation kwargs
 const default_conservative_interp_kwargs_dict = DCIKDT(pairs(default_conservative_interp_kwargs))
 
 get_conservative_interp_kwargs(::Nothing) = default_conservative_interp_kwargs
@@ -125,14 +137,13 @@ Mass-conserving 1D regrid from source nodes `(xp, yp)` onto target coordinates `
 function conservative_regridder(
     x::AbstractVector{FT},
     xp::AbstractVector,
-    yp::AbstractVector;
+    yp::AbstractVector{FT2};
     bc::BCT = ExtrapolateBoundaryCondition(), # must be extrapolate to integrate outside the knots (boundary of the data)... Dierckx integral ignored silently, we use dierckx_safe_integrate() instead
     k::Int = 1,
     method::AbstractInterpolationMethod = FastLinear1DInterpolation,
     f_enhancement_factor = 1,
     f_p_enhancement_factor = 1,
-    integrate_method::Symbol = :invert,
-    rtol::FT = FT(1e-6),
+    integrate_method::AbstractConservativeIntegrateMethod = InvertMass(),
     preserve_monotonicity::Bool = false,
     enforce_positivity::Bool = false,
     nnls_alg::Symbol = :pivot,
@@ -140,7 +151,7 @@ function conservative_regridder(
     enforce_conservation::Bool = true,
     A::Union{AbstractMatrix, Nothing} = nothing,
     Af::Union{AbstractMatrix, LinearAlgebra.Factorization, Nothing} = nothing, # precomputed factorization of A :: technically, A being Diagonal, or Triangular or something could lead to AbstractMatrix Af so we allow both AbstractMatrix and Factorization
-) where {BCT <: ValidBoundaryConditions, FT}
+) where {BCT <: ValidBoundaryConditions, FT, FT2}
 
     # Build the spline
     # each node gets the mean of the spline over its area of influence, which we'll define as being the nearest neighbor
@@ -149,20 +160,11 @@ function conservative_regridder(
     # get the spline
     spl = build_spline(method, xp, yp; bc = bc)
 
-    # calculate bin edges, at the end assume the same spacing, as is if it was a cell center
-    n = length(x)
-    x_edges = similar(x, n + 1)
-    @inbounds begin
-        x_edges[1] = x[1] - (x[2] - x[1]) / 2
-        for i in 1:(n - 1)
-            x_edges[i + 1] = (x[i] + x[i + 1]) / 2
-        end
-        x_edges[n + 1] = x[n] + (x[n] - x[n - 1]) / 2
-    end
+    # bin edges: midpoints of the centres, with the end cells given the spacing of their neighbour
+    x_edges = xf_from_xc(x)
 
 
-
-    y = zero.(x)
+    y = zeros(FT2, axes(x))
 
     for i in 1:length(x)
         # integrate over the area of influence
@@ -171,14 +173,14 @@ function conservative_regridder(
     end
 
 
-    if integrate_method == :integrate
-        # Then we're done... 
-    elseif integrate_method == :invert # This should be less diffusive and better preserve peaks so we make it the default
+    if integrate_method isa IntegrateMass
+        # Then we're done...
+    elseif integrate_method isa InvertMass
         # really, integrating the spline gives us the necessary mass, but it doesn't tell us the values at the points that would create a spline with that mass
         # really, what we want is a value such that calculating a new spline with the new points would yield the same total
         # for linear that's hard to do, but not so easy for a spline since you don't know what the new coefficients would be...
 
-        # we need to find values that will yield the masses 
+        # we need to find values that will yield the masses
 
         # xf = x_edges
         # Δx = xf[2:end] .- xf[1:end-1]
@@ -243,7 +245,7 @@ function conservative_regridder(
 
 
     else
-        error("integrate_method not recognized")
+        error("integrate_method $(integrate_method) is neither IntegrateMass() nor InvertMass()")
         # each new point takes the average of its area of influence. we still use the spline in case we need to upsample
     end
 
@@ -277,15 +279,16 @@ end
 # ----------------------------------------------------------------
 # xf_from_xc! (in-place)
 # ----------------------------------------------------------------
-function xf_from_xc!(xf::AbstractVector{T}, xc::AbstractVector{T}) where {T <: AbstractFloat}
+function xf_from_xc!(xf::AbstractVector{T}, xc::AbstractVector{T})where {T <: AbstractFloat}
     N = length(xc)
     @assert length(xf) == N + 1
+    half = one(T) / T(2)
     @inbounds begin
         for i in 1:(N - 1)
-            xf[i + 1] = (xc[i] + xc[i + 1]) * T(0.5)
+            xf[i + 1] = (xc[i] + xc[i + 1]) * half
         end
-        xf[1] = xc[1] - (xc[2] - xc[1]) * T(0.5)
-        xf[N + 1] = xc[N] + (xc[N] - xc[N - 1]) * T(0.5)
+        xf[1] = xc[1] - (xc[2] - xc[1]) * half
+        xf[N + 1] = xc[N] + (xc[N] - xc[N - 1]) * half
     end
     return xf
 end
@@ -295,8 +298,8 @@ end
 # ----------------------------------------------------------------
 function xf_from_xc(xc::AbstractVector{T}) where {T <: AbstractFloat}
     N = length(xc)
-    xf = similar(xc, N + 1)
-    xf_from_xc!(xf, xc)
+    xf = similar(xc, T, N + 1)
+    return xf_from_xc!(xf, xc)
 end
 
 
@@ -338,7 +341,7 @@ E.g.
 
     Note this can go off the rails in extrapolation, and at high orders.
     It's also not that fast...
-    
+
 
     Note -- `conservative_regridder calls this method...`
 
@@ -513,24 +516,11 @@ function conservative_mass_matrix(
     method::AbstractInterpolationMethod = FastLinear1DInterpolation,
 ) where {FT, BCT <: ValidBoundaryConditions}
 
-    # calculate bin edges, at the end assume the same spacing, as is if it was a cell center
-    n = length(xc)
-    xf = similar(xc, n + 1)
-    @inbounds begin
-        xf[1] = xc[1] - (xc[2] - xc[1]) / 2
-        for i in 1:(n - 1)
-            xf[i + 1] = (xc[i] + xc[i + 1]) / 2
-        end
-        xf[n + 1] = xc[n] + (xc[n] - xc[n - 1]) / 2
-    end
+    # bin edges: midpoints of the centres, with the end cells given the spacing of their neighbour
+    xf = xf_from_xc(xc)
 
     n = length(xc)
-    if FT <: Int
-        # allocates; a non-allocating similar()-based version would be better
-        A = zeros(Float64, n, n) # need a float type: can't factorize/integrate/transform in integer arithmetic
-    else
-        A = zeros(FT, n, n)
-    end
+    A = zeros(FT, n, n)
 
     @inbounds for j in 1:n
         ej = zeros(FT, n)

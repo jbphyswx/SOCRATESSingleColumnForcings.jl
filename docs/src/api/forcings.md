@@ -28,10 +28,32 @@ les_reference_profiles
 les_reference_profiles!
 ```
 
+## Regridding options
+
+The two regrid stages are configured independently; see [Column forcings](../forcings.md) for how they
+compose.
+
+```@docs
+RegriddingOpts
+RegriddingOpts
+ConservativeRegridingOpts
+output_z_regrid_opts
+MassMatrixCache
+MassMatrixKey
+mass_matrix!
+```
+
+## LES averaging windows
+
+```@docs
+les_output_period
+les_averaging_window
+```
+
 ## Surface
 
 ```@docs
-get_SSCF_surface_reference_state!
 get_surface_reference_state
+get_surface_reference_state!
 get_surface_forcing
 ```

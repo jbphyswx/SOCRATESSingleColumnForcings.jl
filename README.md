@@ -51,8 +51,8 @@ Load an extension by `using` its weak dependency in the same session, e.g. `usin
 using SOCRATESSingleColumnForcings: SOCRATESSingleColumnForcings as SSCF
 
 # 1. Download data (once per flight; stored as Julia artifacts)
-SSCF.download_atlas_les_inputs(flight_numbers = [9])
-SSCF.download_atlas_les_outputs(flight_numbers = [9])
+SSCF.download_atlas_les_inputs("/path/to/dir"; flight_numbers = [9])
+SSCF.download_atlas_les_outputs("/path/to/dir"; flight_numbers = [9])
 
 # 2. Build column forcing on the default Atlas vertical grid
 using Thermodynamics: Thermodynamics as TD
@@ -87,7 +87,8 @@ Regrid onto a custom vertical grid:
 ```julia
 new_z = collect(0.0:100.0:4000.0)
 forcing = SSCF.get_column_forcing(
-    9, SSCF.ObsForcing(), new_z;
+    9, SSCF.ObsForcing();
+    new_z = new_z,
     thermodynamics_backend = tp,
 )
 ```
@@ -136,7 +137,7 @@ SSCF.get_column_forcing(
 | Storage type | Role | When to use |
 |--------------|------|-------------|
 | `StepRangeLen` | Uniform time axis (stdlib range) | Default; O(1) interval search |
-| `UniformRange` | Custom uniform range with precomputed `inv_step` | ~4 ns eval; avoids `StepRangeLen` twiceprecision |
+| `UniformRange` | Custom uniform range with precomputed `inv_step` | O(1) eval; avoids `StepRangeLen` twiceprecision |
 | `Vector` / `SVector` | Irregular or small fixed node sets | General backing; `SVector` for isbits hot paths |
 | `Constant` / `ConstantVector` | Exactly-constant fields after collinear pruning | Constant-field fast path |
 
@@ -162,7 +163,7 @@ SSCF.open_atlas_les_grid(9)
 
 ## Data and artifacts
 
-Forcing and LES files are too large for the repository. They are fetched via `download_atlas_les_inputs` / `download_atlas_les_outputs` and registered as [Julia artifacts](https://pkgdocs.julialang.org/v1/artifacts/) (`Artifacts.toml`). Raw download URLs and Rachel Atlas's original scripts live under `Data/Atlas_LES_Profiles/`.
+Forcing and LES files are distributed as lazy [Julia artifacts](https://pkgdocs.julialang.org/v1/artifacts/) (`Artifacts.toml`), downloaded and cached on first use — `src/artifacts.jl` resolves them, and no manual step is needed. `download_atlas_les_inputs` / `download_atlas_les_outputs` in `src/raw_data_sources.jl` fetch the raw upstream files to rebuild those artifacts. Rachel Atlas's original scripts are under `Rachel_Atlas_Scripts/`.
 
 See [docs/data-and-artifacts.md](docs/src/data-and-artifacts.md) or the [Documenter guide](https://jbphyswx.github.io/SOCRATESSingleColumnForcings.jl/dev/data-and-artifacts/).
 
@@ -220,8 +221,10 @@ src/
   open_atlas_les_inputs.jl          # Atlas input I/O
   open_atlas_les_outputs.jl         # Atlas LES output I/O
   les_reference_profiles.jl         # p/ρ reference profiles
+  artifacts.jl                      # runtime artifact resolution (every read goes through here)
+  raw_data_sources.jl               # upstream Box/UW links + artifact-regeneration helpers
 ext/                                # optional-backend extensions
-Data/Atlas_LES_Profiles/            # download script + upstream links
+Data/Atlas_LES_Profiles/            # local copies of the Atlas data
 test/                               # unit + integration tests
 ```
 

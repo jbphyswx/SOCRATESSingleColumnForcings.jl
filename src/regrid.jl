@@ -8,25 +8,158 @@ The interpolation API lives in the `Interpolation` submodule; call it via qualif
 =#
 
 """
-    interp_along_dim
+    ConservativeRegridingOpts(; k = 1, f_enhancement_factor = 1, f_p_enhancement_factor = 1,
+                     kwargs = Interpolation.default_conservative_interp_kwargs)
 
-interpolation data
+Settings for a conservative vertical regrid: the refinement factors the mass matrix is built at, and
+the solver options in [`Interpolation.default_conservative_interp_kwargs`](@ref).
 
-# var : the data to be interpolated
-# interp_dim: the name or dimension number along which we will do interpolation
+Its presence is what selects a conservative regrid — a stage holds one of these or `nothing`, so
+there is no separate flag that can disagree with the settings.
+"""
+struct ConservativeRegridingOpts{CK <: Interpolation.DCIKT}
+    k::Int
+    f_enhancement_factor::Int
+    f_p_enhancement_factor::Int
+    kwargs::CK
+end
+ConservativeRegridingOpts(;
+    k::Int = 1,
+    f_enhancement_factor::Int = 1,
+    f_p_enhancement_factor::Int = 1,
+    kwargs::Interpolation.DCIKT = Interpolation.default_conservative_interp_kwargs,
+) = ConservativeRegridingOpts(k, f_enhancement_factor, f_p_enhancement_factor, kwargs)
 
-# interp_dim_in: the coordinate on which the data is currently aligned
-# interp_dim_out: the coordinate on which we would like to interpolate the data to
+"""
+    RegriddingOpts(; method, bc, conservative, drop_collinear)
 
-the function will create splines along interp_dim_in...
-- if we set interp_dim_out, we actually evaluate the function along interp_dim at locations interp_dim_out,otherwise, we just return our unevaluated spline functions
+How a field is evaluated onto the new vertical grid. `conservative` is a [`ConservativeRegridingOpts`](@ref)
+or `nothing`.
 
-- data_func is a func to be applied to the raw data before it is processed, though perhaps it it most useful if interp_dim_out is unset and we are returning functions...
-- vectorize_in means your input is an array and you need to loop over it too (as opposed to just being a fixed template vector)
+`bc` defaults to extrapolation when conservative, because the regrid integrates past the outermost
+knots.
+"""
+struct RegriddingOpts{
+    M <: Interpolation.AbstractInterpolationMethod,
+    BC <: Interpolation.ValidBoundaryConditions,
+    C <: Union{Nothing, ConservativeRegridingOpts},
+    DC <: Val,
+}
+    method::M
+    bc::BC
+    conservative::C
+    drop_collinear::DC
+end
+RegriddingOpts(;
+    method::Interpolation.AbstractInterpolationMethod = Interpolation.FastLinear1DInterpolation,
+    conservative::Union{Nothing, ConservativeRegridingOpts} = nothing,
+    bc::Interpolation.ValidBoundaryConditions = isnothing(conservative) ? Interpolation.ErrorBoundaryCondition() : Interpolation.ExtrapolateBoundaryCondition(),
+    drop_collinear::Val = Val(false),
+) = RegriddingOpts(method, bc, conservative, drop_collinear)
 
-Note the conservative_regirdder() returns actual output arrays -- it won't work if you are just creating a spline fcn
 
-To Do : decide types
+"""
+Cache key for a conservative mass matrix: everything the matrix is a function of — the interpolation
+method, the boundary condition, the refinement factor, and the target grid.
+"""
+const MassMatrixKey = Tuple{DataType, DataType, Int, <:Vector{<:AbstractFloat}}
+
+"""
+    MassMatrixCache{FT}()
+
+Conservative mass matrices and their factorizations, reusable across fields and across calls.
+
+Keyed by [`MassMatrixKey`](@ref)
+"""
+struct MassMatrixCache{FT}
+    A::Dict{MassMatrixKey, Matrix{FT}}
+    Af::Dict{MassMatrixKey, LinearAlgebra.LU{FT, Matrix{FT}, Vector{Int}}}
+end
+MassMatrixCache{FT}() where {FT} = MassMatrixCache{FT}(
+    Dict{MassMatrixKey, Matrix{FT}}(),
+    Dict{MassMatrixKey, LinearAlgebra.LU{FT, Matrix{FT}, Vector{Int}}}(),
+)
+
+"""
+    mass_matrix!(cache, z_new, opts) -> (A, Af)
+
+The conservative mass matrix for `z_new` under `opts` and its factorization, building and storing them
+on first use. Returns `(nothing, nothing)` when `opts` is not conservative.
+"""
+function mass_matrix!(cache::MassMatrixCache{FT}, z_new, opts::RegriddingOpts) where {FT}
+    isnothing(opts.conservative) && return (nothing, nothing)
+    key = (typeof(opts.method), typeof(opts.bc), opts.conservative.k, FT.(collect(z_new)))::MassMatrixKey
+    if !haskey(cache.A, key)
+        cache.A[key] = Matrix{FT}(Interpolation.conservative_mass_matrix(
+            z_new; method = opts.method, k = opts.conservative.k, bc = opts.bc,
+        ))
+        cache.Af[key] = LinearAlgebra.factorize(cache.A[key])
+    end
+    return (cache.A[key], cache.Af[key])
+end
+
+"""
+    inplace_eval_kernel(method, conservative)
+
+The in-place `(y, x, xp, fp; bc)` evaluation kernel for `method`, or `nothing` when it has none and the
+caller must use the allocating form. A conservative regrid solves a system per column and has no
+in-place form, so it returns `nothing` for every method.
+"""
+inplace_eval_kernel(::Interpolation.AbstractInterpolationMethod, ::ConservativeRegridingOpts) = nothing
+inplace_eval_kernel(::Interpolation.AbstractInterpolationMethod, ::Nothing) = nothing
+inplace_eval_kernel(::Interpolation.FastLinear1DInterpolationMethod, ::Nothing) = Interpolation.fast1d_interp!
+
+"""
+    _alloc_eval_output(vardata, interp_dim_num, x_new, xp)
+
+Output array for evaluating `vardata`'s columns at `x_new`: `vardata`'s shape with `interp_dim_num`
+resized to `length(x_new)`
+"""
+_alloc_eval_output(vardata, interp_dim_num::Int, x_new, xp) = Array{
+    promote_type(eltype(x_new), eltype(xp), eltype(vardata)),
+}(
+    undef,
+    ntuple(d -> d == interp_dim_num ? length(x_new) : size(vardata, d), Val(ndims(vardata)))...,
+)
+
+"""
+    eval_columns_into!(out, interp_dim_num, x_new, columns, interp_func, kernel, bc)
+
+Evaluate each `(coordinate, values)` pair of `columns` at `x_new` into `out`, in the order `eachslice`
+visits it.
+"""
+function eval_columns_into!(out, interp_dim_num::Int, x_new, columns, interp_func, kernel, bc)
+    column_dims = Tuple(d for d in 1:ndims(out) if d != interp_dim_num)
+    for (dst, (xp, fp)) in zip(eachslice(out; dims = column_dims), columns)
+        if isnothing(kernel)
+            dst .= interp_func(x_new, xp, fp)
+        else
+            kernel(dst, x_new, xp, fp; bc = bc)
+        end
+    end
+    return out
+end
+
+"""
+    interp_along_dim(var, interp_dim, interp_dim_in,
+                     interpolant_coord_types, interpolant_value_types, drop_collinear_val;
+                     interp_dim_out, bc, method, conservative, ...)
+
+Interpolate `var` along `interp_dim` (a dimension number, or a name resolved against `data`), from
+the coordinate `interp_dim_in` it currently sits on.
+
+`interp_dim_out` selects between the two paths:
+- given, it EVALUATES at those coordinates and returns an array;
+- `nothing`, it BUILDS one interpolant per column and returns them, storing nodes and values in the
+  backings named by `interpolant_coord_types` / `interpolant_value_types` and pruning collinear
+  interior nodes per `drop_collinear_val`.
+
+`interp_dim_in_is_full_array` says whether `interp_dim_in` is a coordinate per column (same shape as
+`var`) rather than one shared template vector.
+
+`bc` is the out-of-range policy
+
+`conservative` is a [`ConservativeRegridingOpts`](@ref) or `nothing`;
 """
 function interp_along_dim(
     var,
@@ -41,21 +174,13 @@ function interp_along_dim(
     data_func::Union{Function, Nothing} = nothing,
     interp_dim_in_is_full_array::Bool = true,
     # reshape_ground::Bool = true,
-    interp_method::Interpolation.AbstractInterpolationMethod = Interpolation.FastLinear1DInterpolation,
-    interp_kwargs::NamedTuple = (;),
-    conservative_interp::Bool = false,
-    conservative_interp_kwargs::Interpolation.DCIKT = Interpolation.default_conservative_interp_kwargs,
+    method::Interpolation.AbstractInterpolationMethod = Interpolation.FastLinear1DInterpolation,
+    conservative::Union{Nothing, ConservativeRegridingOpts} = nothing,
+    # A conservative regrid has to integrate past the outermost knots, so it extrapolates by default.
+    bc::Interpolation.ValidBoundaryConditions = isnothing(conservative) ? Interpolation.ErrorBoundaryCondition() : Interpolation.ExtrapolateBoundaryCondition(),
     A::Union{Nothing, AbstractArray} = nothing,
     Af::Union{Nothing, AbstractArray, LinearAlgebra.Factorization} = nothing, # precomputed factorization of A :: technically, A being Diagonal, or Triangular or something could lead to AbstractMatrix Af so we allow both AbstractMatrix and Factorization
 ) where {interpolant_coord_types <: Tuple, interpolant_value_types <: Tuple, drop_collinear}
-    f_enhancement_factor = get(interp_kwargs, :f_enhancement_factor, 1) # default to 1.0
-    f_p_enhancement_factor = get(interp_kwargs, :f_p_enhancement_factor, 1) # default to 1.0
-    if conservative_interp
-        bc::Interpolation.AbstractBoundaryCondition = Interpolation.create_bc(get(interp_kwargs, :bc, Interpolation.ExtrapolateBoundaryCondition())) # default to extrapolate
-    else
-        bc = Interpolation.create_bc(get(interp_kwargs, :bc, Interpolation.ErrorBoundaryCondition())) # default to error
-    end
-    k = get(interp_kwargs, :k, 1) # default to 1
 
 
 
@@ -76,20 +201,21 @@ function interp_along_dim(
 
     # Unified evaluator with a positional (xnew, xp, fp) interface: conservative regridder or plain interpolation.
     interp_func =
-        conservative_interp ?
+        isnothing(conservative) ?
+        ((xnew, xp, fp) -> Interpolation.interpolate_1d(xnew, xp, fp, method; bc = bc)) :
         ((xnew, xp, fp) -> Interpolation.conservative_regridder(
             xnew,
             xp,
             fp;
-            method = interp_method,
+            method = method,
             bc = bc,
-            k = k,
-            f_enhancement_factor = f_enhancement_factor,
-            f_p_enhancement_factor = f_p_enhancement_factor,
+            k = conservative.k,
+            f_enhancement_factor = conservative.f_enhancement_factor,
+            f_p_enhancement_factor = conservative.f_p_enhancement_factor,
             A = A,
             Af = Af,
-            conservative_interp_kwargs...,
-        )) : ((xnew, xp, fp) -> Interpolation.interpolate_1d(xnew, xp, fp, interp_method; bc = bc))
+            conservative.kwargs...,
+        ))
     # coordinate and value get INDEPENDENT storage specs (backing, eltype); Base.Fix1 fixes the spec TYPE, varies v.
     coord_conv = Base.Fix1(Interpolation.coerce_vector, interpolant_coord_types)
     value_conv = Base.Fix1(Interpolation.coerce_vector, interpolant_value_types)
@@ -100,58 +226,64 @@ function interp_along_dim(
             # BUILD path: one interpolant per column, pruned per `drop_collinear` during construction
             # (no full-node interpolant materialized). `map` takes the array eltype from the results —
             # concrete when the backing type is length-invariant (Vector, …), abstract when it encodes
-            # the node count (SVector{N}, …), for which coerce_to_shared_nodes is the opt-in unifier.
+
             # One path for any AbstractVector backing and either drop setting.
             xin = coord_conv(interp_dim_in)
             result = map(eachslice(vardata; dims = Tuple(d for d in 1:ndims(vardata) if d != interp_dim_num))) do d
-                Interpolation.build_spline(interp_method, xin, value_conv(d); bc = bc, drop_collinear = drop_collinear_val)
+                Interpolation.build_spline(method, xin, value_conv(d); bc = bc, drop_collinear = drop_collinear_val)
             end
             return add_dim(result, interp_dim_num) # reinsert the size-1 interp dim to match the evaluate-path layout
 
         else
-            out = mapslices(
-                let interp_dim_out = interp_dim_out, interp_dim_in = interp_dim_in, interp_func = interp_func, coord_conv = coord_conv, value_conv = value_conv
-                    d -> interp_func(interp_dim_out, coord_conv(interp_dim_in), value_conv(d))
-                end,
-                vardata,
-                dims = (interp_dim_num,),
-            ) # lambda fcn will evaluate, svector less meaningful
-
-            return out
+            # Every column shares this coordinate, so coerce it once rather than once per column.
+            xin_shared = coord_conv(interp_dim_in)
+            cols = eachslice(vardata; dims = Tuple(d for d in 1:ndims(vardata) if d != interp_dim_num))
+            out = _alloc_eval_output(vardata, interp_dim_num, interp_dim_out, xin_shared)
+            return eval_columns_into!(
+                out, interp_dim_num, interp_dim_out,
+                ((xin_shared, value_conv(d)) for d in cols),
+                interp_func, inplace_eval_kernel(method, conservative), bc,
+            )
         end
     else # vectorize over input dim values as well as data (no support for vectorize over output dim yet)
-        # stack on new catd dimension, then split apart inside the fcn call
-        catd = ndims(vardata) + 1
-        _input = cat(interp_dim_in, vardata; dims = catd) # although maybe the input is just a vector in which case this won't work..... we could just pass it in
         if isnothing(interp_dim_out)
             # BUILD path (stacked [coord data] layout): same unified map as the non-full-array case;
             # each slice is the 2-column matrix (d[:,1] = coord, d[:,2] = data), pruned per
-            # `drop_collinear` during construction; `map` sets the eltype from the results.
+            # `drop_collinear` during construction; `map` sets the eltype from the results. Only this
+            # path needs the stacked array; the evaluate path below walks the two inputs together.
+            catd = ndims(vardata) + 1
+            _input = cat(interp_dim_in, vardata; dims = catd) # although maybe the input is just a vector in which case this won't work..... we could just pass it in
             result = map(eachslice(_input; dims = Tuple(d for d in 1:ndims(_input) if d != interp_dim_num && d != catd))) do d
-                Interpolation.build_spline(interp_method, coord_conv(d[:, 1]), value_conv(d[:, 2]); bc = bc, drop_collinear = drop_collinear_val)
+                Interpolation.build_spline(method, coord_conv(d[:, 1]), value_conv(d[:, 2]); bc = bc, drop_collinear = drop_collinear_val)
             end
             return add_dim(result, interp_dim_num) # reinsert the size-1 interp dim (catd reduced out)
         else
-            out = dropdims(
-                mapslices(
-                    let interp_dim_out = interp_dim_out, interp_func = interp_func, coord_conv = coord_conv, value_conv = value_conv
-                        d -> interp_func(interp_dim_out, coord_conv(d[:, 1]), value_conv(d[:, 2]))
-                    end,
-                    _input,
-                    dims = (interp_dim_num, catd),
-                );
-                dims = catd,
-            ) # lambda fcn will evaluate
 
-            return out
+            column_dims = Tuple(d for d in 1:ndims(vardata) if d != interp_dim_num)
+            out = _alloc_eval_output(vardata, interp_dim_num, interp_dim_out, interp_dim_in)
+            return eval_columns_into!(
+                out, interp_dim_num, interp_dim_out,
+                (
+                    (coord_conv(xc), value_conv(fc)) for (xc, fc) in
+                    zip(eachslice(interp_dim_in; dims = column_dims), eachslice(vardata; dims = column_dims))
+                ),
+                interp_func, inplace_eval_kernel(method, conservative), bc,
+            )
         end
     end
 end
 
 """
-    var_to_new_coord
+    var_to_new_coord(var, coord_in, interp_dim, interpolant_coord_types, interpolant_value_types,
+                     drop_collinear; coord_new, weight, weight_regridded, bc, ...)
 
-if coord_new is nothing, then will return functions...
+[`interp_along_dim`](@ref) with optional weighting: `coord_new = nothing` returns built interpolants,
+otherwise it evaluates onto `coord_new`.
+
+`weight` makes the regrid mass-weighted, computing `interp(var .* weight) ./ interp(weight)` — for an
+extensive variable, or for conservative regridding, this is typically density. The denominator is the
+same for every field sharing a `(weight, grid, method)`, so a caller that regrids many fields can
+compute it once and pass it as `weight_regridded` instead of having it recomputed per field.
 """
 function var_to_new_coord(
     var,
@@ -164,10 +296,9 @@ function var_to_new_coord(
     coord_new = nothing,
     data = nothing,
     data_func::Union{Function, Nothing} = nothing,
-    interp_method::Interpolation.AbstractInterpolationMethod = Interpolation.FastLinear1DInterpolation,
-    interp_kwargs::NamedTuple = (;),
-    conservative_interp::Bool = false,
-    conservative_interp_kwargs::Interpolation.DCIKT = Interpolation.default_conservative_interp_kwargs,
+    method::Interpolation.AbstractInterpolationMethod = Interpolation.FastLinear1DInterpolation,
+    conservative::Union{Nothing, ConservativeRegridingOpts} = nothing,
+    bc::Interpolation.ValidBoundaryConditions = isnothing(conservative) ? Interpolation.ErrorBoundaryCondition() : Interpolation.ErrorBoundaryCondition(),
     weight = nothing, # for extensive variables and for conservative regridding, you may wish to weight by something like density when interpolating in z...
     # Precomputed regridded weight = the `interp(weight)` normalization denominator. When supplied it is
     # used directly, skipping the redundant second `interp_along_dim(weight, …)`: that denominator is
@@ -191,71 +322,30 @@ function var_to_new_coord(
 
     # evaluate interp_dim_in_is_full_array based on the size of the input... interp_dim_in is full array false is much faster cause dont have to double loop in vectorization...
 
-    if isnothing(weight) # if weight is a number, we assume it's a scalar and we don't need to do anything
-        return interp_along_dim(
-            vardata,
-            interp_dim,
-            coord_in,
-            interpolant_coord_types,
-            interpolant_value_types,
-            Val(drop_collinear);
-            interp_dim_out = coord_new,
-            data = data,
-            data_func = data_func,
-            interp_dim_in_is_full_array = (size(coord_in) == size(vardata)),
-            interp_method = interp_method,
-            interp_kwargs = interp_kwargs,
-            conservative_interp = conservative_interp,
-            conservative_interp_kwargs = conservative_interp_kwargs,
-            A = A,
-            Af = Af,
-        )
+    interp_dim_in_is_full_array = (size(coord_in) == size(vardata))
+    _interp(v) = interp_along_dim(
+        v,
+        interp_dim,
+        coord_in,
+        interpolant_coord_types,
+        interpolant_value_types,
+        Val(drop_collinear);
+        interp_dim_out = coord_new,
+        data = data,
+        data_func = data_func,
+        interp_dim_in_is_full_array = interp_dim_in_is_full_array,
+        method = method,
+        conservative = conservative,
+        bc = bc,
+        A = A,
+        Af = Af,
+    )
 
-    else
-
-        num = interp_along_dim(
-            vardata .* weight,
-            interp_dim,
-            coord_in,
-            interpolant_coord_types,
-            interpolant_value_types,
-            Val(drop_collinear);
-            interp_dim_out = coord_new,
-            data = data,
-            data_func = data_func,
-            interp_dim_in_is_full_array = (size(coord_in) == size(vardata)),
-            interp_method = interp_method,
-            interp_kwargs = interp_kwargs,
-            conservative_interp = conservative_interp,
-            conservative_interp_kwargs = conservative_interp_kwargs,
-            A = A,
-            Af = Af,
-        )
-        # Denominator = interp(weight). Reuse the caller-precomputed value if given (identical across every
-        # field sharing this weight/grid/method); otherwise compute it here (bit-identical to before).
-        den =
-            isnothing(weight_regridded) ?
-            interp_along_dim(
-                weight,
-                interp_dim,
-                coord_in,
-                interpolant_coord_types,
-                interpolant_value_types,
-                Val(drop_collinear);
-                interp_dim_out = coord_new,
-                data = data,
-                data_func = data_func,
-                interp_dim_in_is_full_array = (size(coord_in) == size(vardata)),
-                interp_method = interp_method,
-                interp_kwargs = interp_kwargs,
-                conservative_interp = conservative_interp,
-                conservative_interp_kwargs = conservative_interp_kwargs,
-                A = A,
-                Af = Af,
-            ) : weight_regridded
-        return num ./ den
-
-    end
+    isnothing(weight) && return _interp(vardata)
+    # Denominator = interp(weight). Reuse the caller-precomputed value if given (identical across every
+    # field sharing this weight/grid/method); otherwise compute it here.
+    den = isnothing(weight_regridded) ? _interp(weight) : weight_regridded
+    return _interp(vardata .* weight) ./ den
 end
 
 
@@ -285,8 +375,9 @@ regrid_source_data(source::LESOutput, flight_number, data) =
 # old vertical coordinate (before regridding onto `z_new`)
 regrid_source_z_old(::AtlasInput, data; thermodynamics_backend) =
     z_from_data(data; thermodynamics_backend) # time-varying; ground value pads the bottom with 0
-regrid_source_z_old(::LESOutput, data; thermodynamics_backend) =
-    vec(Array(data["z"])) # static column, already present in the LES output
+regrid_source_z_old(::LESOutput, data, flight_number::Int, ::Type{FT}; thermodynamics_backend) where {FT} =
+    # vec(Array(data["z"])) # static column, already present in the LES output
+    _load_grid(flight_number, Val(true), FT) # static column # is float64 so less lossy
 
 # old time coordinate, in SECONDS from the start of the data
 regrid_source_t_old(::AtlasInput, data) = vec(Array(data["tsec"]))
@@ -315,26 +406,61 @@ Float32[
 
 that it's all rounding error...
 """
-function regrid_source_t_old(::LESOutput, data, ::Val{fix_rounding_error} = Val(true)) where {fix_rounding_error} # Val for type stability 
+function regrid_source_t_old(::LESOutput, data, ::Val{fix_rounding_error} = Val(true), ::Val{fix_averaging} = Val(true)) where {fix_rounding_error, fix_averaging} # Val for type stability
     if fix_rounding_error
         n = length(data["time"])
-        out = Vector{Int64}(undef, n) # could do like UInt32 but not worth extra readability loss
+        out = fix_averaging ? Vector{Int64}(undef, n+1) : Vector{Int64}(undef, n) # could do like UInt32 but not worth extra readability loss
         t = vec(Array(data["time"]))
-        @inbounds for i in eachindex(out)
-            # out[i] = Int64(Int64(300) * (i - 1)) # fast
-            out[i] = Int64(300 * round((t[i] - t[1]) * 86400 / 300)) # works on sliced data, etc
+        @inbounds for i in eachindex(fix_averaging ? view(out, 1:n) : out)
+            out[i] = Int64(300 * round((t[i] - t[1]) * 86400 / 300))
+            if !fix_averaging # data remains on midpoints
+                out[i] += Int64(150) # works on sliced data, etc
+            end
+        end
+        if fix_averaging
+            out[end] = out[end-1] + Int64(300) # add the last point for the final window's end
         end
     else
         t = vec(Array(data["time"])) # LES stores time in days
-        out = @. (t - t[1]) * (24 * 3600) # -> seconds from start
+        # out = @. (t - t[1]) * (24 * 3600) # -> seconds from start
+        # out = @. (t - t[1]) * (24 * 3600) # -> seconds from start
+        if fix_averaging
+            out = Vector{eltype(t)}(undef, length(t)+1)
+            @. out[1:end-1] = (round((t - t[1]) * (24 * 3600)))
+            out[end] = out[end-1] + Int64(300) # 
+        else
+            out = @. (t - t[1]) * (24 * 3600) + Int64(150) # seconds from start, data remains on midpoints
+        end
     end
     return out
 end
+
+"""
+    les_output_period(t_days)
+
+Sampling period [s] of an LES time axis given in days
+"""
+@inline les_output_period(::Type{T} = Int64) where {T} =  T(300)
+
+"""
+    les_averaging_window(t_days) -> (; period, half_period)
+
+The averaging window each LES sample represents, in seconds: its length, and the offset from a
+sample's label back to the start of its window.
+
+Every value in an LES output file is a mean over one window, labelled at that window's MIDPOINT. SAM
+accumulates over `nstat` steps between writes and stamps the record `day - nstat*dt/2/86400`
+"""
+@inline les_averaging_window(::Type{T} = Int64) where {T} =  (; period = T(300), half_period = T(150))
 
 # index of the reference/initial timestep within `t_old`
 regrid_source_initial_ind(::AtlasInput, data, flight_number, t_old) =
     initial_index(data, flight_number; t_old = t_old)
 regrid_source_initial_ind(::LESOutput, data, flight_number, t_old) = 1 # LES output starts at the initial condition
+
+# Instant that model time 0 refers to
+regrid_source_t_origin(::AbstractRegridSource, data, t_old, initial_ind) = t_old[initial_ind] # `tsec` is absolute (seconds after 00Z on nbdate)
+regrid_source_t_origin(::LESOutput, data, t_old, initial_ind) = zero(eltype(t_old)) # `regrid_source_t_old` already opens the axis at the first window's midpoint
 
 # is `z_old` time-varying (needs per-timestep selection) rather than a single static column?
 regrid_source_z_time_varying(::AtlasInput) = true
@@ -345,12 +471,19 @@ regrid_source_reverse_z(::AtlasInput) = true  # Atlas pressure levels come top -
 regrid_source_reverse_z(::LESOutput) = false  # LES output is already ground -> top
 
 """
-    regrid_to_z_and_time(var, z_new, z_dim, time_dim, flight_number, interpolant_fieldtype = Vector; source = AtlasInput(), kwargs...)
+    regrid_to_z_and_time(var, z_new, z_dim, time_dim, flight_number,
+                         interpolant_coord_types, interpolant_value_types;
+                         source = AtlasInput(), bc, kwargs...)
 
-Take data from a regrid `source`, interpolate it to `z_new`, then build time splines over the times
+Take data from a regrid `source`, interpolate it onto `z_new`, then build time splines over the times
 we have. To vectorize properly over `z_new` it should be the same shape as `vardata` (+ ground). The
 `source` (default [`AtlasInput`](@ref); [`LESOutput`](@ref) for LES files) selects the few
 source-specific steps via the `regrid_source_*` verbs; everything else is shared.
+
+The two stages are configured independently: `z_regrid_opts` is a [`RegriddingOpts`](@ref) for the
+evaluation onto `z_new`, `t_regrid_opts` a [`RegriddingOpts`](@ref) for the returned time splines.
+`interpolant_coord_types` / `interpolant_value_types` are the `Tuple{Backing, Eltype}` storage specs
+for the built interpolants' nodes and values.
 """
 function regrid_to_z_and_time(
     var,
@@ -369,12 +502,9 @@ function regrid_to_z_and_time(
     data = nothing,
     initial_condition::Bool = false,
     assume_monotonic::Bool = false,
-    interp_method::Interpolation.AbstractInterpolationMethod = Interpolation.FastLinear1DInterpolation,
-    interp_kwargs::NamedTuple = (;),
-    drop_collinear::Val = Val(false), # prune collinear nodes of the built (returned) time-spline interpolants; caller-overridable
+    z_regrid_opts::RegriddingOpts = RegriddingOpts(),
+    t_regrid_opts::RegriddingOpts = RegriddingOpts(),
     ground_indices = :end,
-    conservative_interp::Bool = false,
-    conservative_interp_kwargs::Interpolation.DCIKT = Interpolation.default_conservative_interp_kwargs,
     weight = nothing, # for extensive variables and for conservative regridding, you may wish to weight by something like density when interpolating in z...
     weightg = nothing, # for extensive variables and for conservative regridding, you may wish to weight by something like density when interpolating in z...
     return_before_interp::Bool = false,
@@ -388,12 +518,12 @@ function regrid_to_z_and_time(
     return_after_z_interp::Bool = false,
 ) where {interpolant_coord_types <: Tuple, interpolant_value_types <: Tuple}
 
-    if conservative_interp && isnothing(A)
+    if !isnothing(z_regrid_opts.conservative) && isnothing(A)
         A = Interpolation.conservative_mass_matrix(
             z_new;
-            method = interp_method,
-            bc = Interpolation.create_bc(get(interp_kwargs, :bc, Interpolation.ExtrapolateBoundaryCondition())),
-            k = get(interp_kwargs, :k, 1),
+            method = z_regrid_opts.method,
+            bc = z_regrid_opts.bc,
+            k = z_regrid_opts.conservative.k,
         )
         Af = LinearAlgebra.factorize(A)
     end
@@ -420,11 +550,9 @@ function regrid_to_z_and_time(
             data = data,
             initial_condition = initial_condition,
             assume_monotonic = assume_monotonic,
-            interp_method = interp_method,
-            interp_kwargs = interp_kwargs,
+            z_regrid_opts = z_regrid_opts,
+            t_regrid_opts = t_regrid_opts,
             ground_indices = ground_indices,
-            conservative_interp = conservative_interp,
-            conservative_interp_kwargs = conservative_interp_kwargs,
             A = A,
             Af = Af,
         )
@@ -434,18 +562,38 @@ function regrid_to_z_and_time(
 
     # get the data and dimensions we're working on
     vardata = isa(var, String) ? data[var] : var
-    if ~isnothing(varg)
+    if !isnothing(varg)
         vardatag = isa(varg, String) ? data[varg] : varg
     end
     z_dim_num = isa(z_dim, String) ? dim_num(z_dim, vardata) : z_dim # if the dim is a string, `data` must be provided so we can resolve it
     time_dim_num = isa(time_dim, String) ? dim_num(time_dim, vardata) : time_dim
 
     if isnothing(z_old)
-        z_old = regrid_source_z_old(source, data; thermodynamics_backend)
+        z_old = (source isa LESOutput) ? regrid_source_z_old(source, data, flight_number, interpolant_value_types.parameters[2]; thermodynamics_backend) : regrid_source_z_old(source, data; thermodynamics_backend)
     end
     if isnothing(t_old)
         if source isa LESOutput
-            t_old = regrid_source_t_old(source, data,((_itp_coord_eltype(interpolant_coord_types) <: AbstractRange) ? Val(true) : Val(true))) # For abstract ranges, go to fixed spacing (actually let's just do it no matter what)
+            fix_rounding_error = true
+            fix_averaging = true
+            t_old = regrid_source_t_old(source, data, Val(fix_rounding_error), Val(fix_averaging)) # snap the jittery Float32 day axis to its exact 300 s grid, and extend to 0 to end
+            # regrid data in time to 0 to end, so it's independent of the bc
+            if fix_averaging
+                lt_old = length(t_old) - 1
+                # LES Data is returned as a mean over a 300s window, <150, 450, 750...>, so we extend to `deaverage` back to <0, 300, ...>, treated separately from the chosen bc
+                var_data_new = Array{eltype(vardata)}(undef, ntuple(i -> i == time_dim_num ? lt_old + 1 : size(vardata, i), ndims(vardata))...)
+                selectdim(var_data_new, time_dim_num, 2:lt_old) .= (selectdim(vardata, time_dim_num, 1:size(vardata, time_dim_num)-1) .+ selectdim(vardata, time_dim_num, 2:size(vardata, time_dim_num))) ./ 2
+                selectdim(var_data_new, time_dim_num, 1) .= selectdim(vardata, time_dim_num, 1) - (selectdim(vardata, time_dim_num, 2) - selectdim(vardata, time_dim_num, 1)) / 2
+                selectdim(var_data_new, time_dim_num, lt_old + 1) .= selectdim(vardata, time_dim_num, size(vardata, time_dim_num)) + (selectdim(vardata, time_dim_num, size(vardata, time_dim_num)) - selectdim(vardata, time_dim_num, size(vardata, time_dim_num) - 1)) / 2
+                vardata = var_data_new
+
+                if !isnothing(varg)
+                    vardatag_new = Array{eltype(vardatag)}(undef, ntuple(i -> i == time_dim_num ? lt_old + 1 : size(vardatag, i), ndims(vardatag))...)
+                    selectdim(vardatag_new, time_dim_num, 2:lt_old) .= (selectdim(vardatag, time_dim_num, 1:size(vardatag, time_dim_num)-1) .+ selectdim(vardatag, time_dim_num, 2:size(vardatag, time_dim_num))) ./ 2
+                    selectdim(vardatag_new, time_dim_num, 1) .= selectdim(vardatag, time_dim_num, 1) - (selectdim(vardatag, time_dim_num, 2) - selectdim(vardatag, time_dim_num, 1)) / 2
+                    selectdim(vardatag_new, time_dim_num, lt_old + 1) .= selectdim(vardatag, time_dim_num, size(vardatag, time_dim_num)) + (selectdim(vardatag, time_dim_num, size(vardatag, time_dim_num)) - selectdim(vardatag, time_dim_num, size(vardatag, time_dim_num) - 1)) / 2
+                    vardatag = vardatag_new
+                end
+            end
         else
             t_old = regrid_source_t_old(source, data)
         end
@@ -459,13 +607,14 @@ function regrid_to_z_and_time(
 
     # Currently interpolates to the nearest available times, not the exact requested time; changing that would need to happen before building the vertical splines.
 
-    if ~isnothing(varg)
-        # here we also are gonna need to check where things get inserted in case they are not in order...
-        if !assume_monotonic # use data to figure out how and where to do insertions...
-        # we need some way to get the local dimension from just a variable
-        else
-            vardata = combine_air_and_ground_data(vardata, vardatag, z_dim_num; insert_location = ground_indices) # append ground data with 0 as the z bottom; drops labeling. Assumes the two variables share size/labels, which isn't guaranteed.
-        end
+    if !isnothing(varg)
+        assume_monotonic || error(
+            "regrid_to_z_and_time: `varg` was supplied with assume_monotonic = false, which would need the " *
+            "insertion index derived per column from the data; that path is not implemented. Pass " *
+            "assume_monotonic = true to append the ground value at the bottom of the z axis, or insert the " *
+            "ground data yourself with `combine_air_and_ground_data` and pass the combined field as `var`.",
+        )
+        vardata = combine_air_and_ground_data(vardata, vardatag, z_dim_num; insert_location = ground_indices) # append ground data with 0 as the z bottom; drops labeling. Assumes the two variables share size/labels, which isn't guaranteed.
     end
 
     # select only the initial condition timestep (keeping the dim via `[]`), else truncate from the
@@ -492,7 +641,8 @@ function regrid_to_z_and_time(
         return vardata
     end
 
-    # interpolate to new z (evaluate onto z_new; `interpolant_fieldtype` is the 4th positional arg)
+    # evaluate onto z_new. This stage is transient — nothing is returned from it — so the coordinate
+    # takes the VALUE storage spec rather than the stored-time-axis one.
     vardata = var_to_new_coord(
         vardata,
         z_old,
@@ -501,10 +651,9 @@ function regrid_to_z_and_time(
         interpolant_value_types;
         coord_new = z_new,
         data = data,
-        interp_method = interp_method,
-        interp_kwargs = interp_kwargs,
-        conservative_interp = conservative_interp,
-        conservative_interp_kwargs = conservative_interp_kwargs,
+        method = z_regrid_opts.method,
+        conservative = z_regrid_opts.conservative,
+        bc = z_regrid_opts.bc,
         weight = weight,
         weight_regridded = weight_regridded,
         A = A,
@@ -523,17 +672,17 @@ function regrid_to_z_and_time(
     # create new time splines. Start the times at t = 0 so the built splines are model-clock aligned.
     vardata = var_to_new_coord(
         vardata,
-        t_old[initial_ind:end] .- t_old[initial_ind],
+        t_old[initial_ind:end] .- regrid_source_t_origin(source, data, t_old, initial_ind),
         time_dim_num,
         interpolant_coord_types,   # stored time coordinate → range (O(1) per-step eval)
         interpolant_value_types,
-        drop_collinear, # caller-set knob (default Val(false)); prunes the returned time-spline interpolants
+        t_regrid_opts.drop_collinear, # prunes the returned time-spline interpolants
         ;
         coord_new = nothing,
         data = data,
-        interp_method = Interpolation.FastLinear1DInterpolation, # linear in time: pchip was tried but produced w=0 in testing, and all queries are within the data bounds so linear suffices
-        interp_kwargs = interp_kwargs,
-        conservative_interp = false, # no conservation needed in time
+        method = t_regrid_opts.method,
+        conservative = t_regrid_opts.conservative,
+        bc = t_regrid_opts.bc,
     )
 
     return vardata

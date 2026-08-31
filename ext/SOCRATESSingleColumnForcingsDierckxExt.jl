@@ -12,9 +12,18 @@ function SSCF.Interpolation.build_spline(
     xp,
     fp;
     bc::BCT = SSCF.Interpolation.ErrorBoundaryCondition(),
+    drop_collinear::Val = Val(false),
+    collinear_tol = promote_type(eltype(xp), eltype(fp))(NaN)
 ) where {BCT <: SSCF.Interpolation.ValidBoundaryConditions}
-    return Dierckx.Spline1D(xp, fp; k = method.k, bc = SSCF.Interpolation.bc_string(bc))
+    xp, fp = SSCF.Interpolation._maybe_prune(drop_collinear, xp, fp, collinear_tol)
+    k = min(method.k, length(xp) - 1) # Dierckx requires k < length(x), and pruning can leave fewer nodes than k
+    return Dierckx.Spline1D(xp, fp; k = k, bc = SSCF.Interpolation.bc_string(bc))
 end
+
+SSCF.Interpolation.interpolant_nodes(spl::Dierckx.Spline1D) = Dierckx.get_knots(spl)
+
+SSCF.Interpolation.rebuild_interpolant(spl::Dierckx.Spline1D, xs, ys) =
+    Dierckx.Spline1D(xs, ys; k = spl.k, bc = Dierckx._translate_bc(spl.bc))
 
 function SSCF.Interpolation.interpolate_1d(
     x,

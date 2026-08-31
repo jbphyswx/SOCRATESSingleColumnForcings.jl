@@ -7,7 +7,7 @@ primitives live in the nested [`Interpolation`](@ref) submodule (qualified calls
 """
 module SOCRATESSingleColumnForcings
 
-using NCDatasets: NCDatasets as NC  
+using NCDatasets: NCDatasets as NC
 using NCDatasets: NCDatasets
 using Artifacts: Artifacts
 using Pkg: Pkg
@@ -23,6 +23,7 @@ using StaticArrays: StaticArrays
 const package_root = dirname(@__DIR__)
 const artifacts_toml = joinpath(package_root, "Artifacts.toml")
 
+include("atlas_diagnostics.jl")
 include("thermodynamics.jl")
 
 resolve_nan(x::FT, val::FT = zero(FT)) where {FT} = isnan(x) ? FT(val) : x # replace nan w/ 0
@@ -105,15 +106,17 @@ end
 # source reaches the API through qualified calls (`Interpolation.foo`).
 include("interpolation/Interpolation.jl")
 
-include("../Data/Atlas_LES_Profiles/download_atlas_les_profiles.jl") # in Data/, not src/ (static path so the module stays statically analyzable)
+include("artifacts.jl")
 include("metadata.jl")
 include("open_atlas_les_inputs.jl")
 include("open_atlas_les_outputs.jl")
+include("raw_data_sources.jl")
 include("array_utils.jl")
 include("netcdf_fields.jl")
 include("ground_insertion.jl")
 include("field_altitude.jl")
 include("regrid.jl")
+include("units.jl") # after regrid.jl: the specs dispatch on AbstractRegridSource
 include("forcings.jl")
 include("les_reference_profiles.jl")
 

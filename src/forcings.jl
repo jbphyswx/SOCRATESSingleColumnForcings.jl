@@ -12,13 +12,6 @@ function _surface_setup(flight_number::Integer, forcing_type::AbstractForcingTyp
     return (; data, z_dim_num, time_dim_num, initial_ind, Tg_offset)
 end
 
-wt_to_qt(wt::FT) where {FT} = wt / (one(FT) + wt) # mixing ratio to specific humidity
-wt_to_qt(wt::AbstractArray{FT}) where {FT} = wt ./ (one(FT) .+ wt) # mixing ratio to specific humidity
-function wt_to_qt!(wt::AbstractArray{FT}) where FT
-    @. wt /= (one(FT) + wt)
-    return wt
-end        
-
 # Worker: compute the reference state from an already-loaded `setup`, using `q_tot` as scratch for
 # the ambient-RH branch. Both public entry points load the dataset exactly once, then call this.
 function _surface_reference_state!(q_tot::AbstractArray{FT}, setup, thermodynamics_backend) where {FT}
@@ -28,7 +21,7 @@ function _surface_reference_state!(q_tot::AbstractArray{FT}, setup, thermodynami
     pg = vec(Array(data["Ps"]))[initial_ind]
 
     if Tg_offset < 0  # SST > Tg: SST sets q_tot at ground level and serves as a source
-        q_tot_g = calc_qg_from_pgTg(thermodynamics_backend, pg, Tg)
+        q_tot_g = saturation_specific_humidity_from_pT(thermodynamics_backend, pg, Tg)
     else # SST < Tg: stable boundary layer, ambient RH controls q_tot (not SST)
         p = vec(Array(data["lev"]))
         q_tot .= NCDatasets.nomissing(read_profile_at_time(Array(data["q"]), z_dim_num, time_dim_num, initial_ind))
@@ -39,12 +32,12 @@ function _surface_reference_state!(q_tot::AbstractArray{FT}, setup, thermodynami
 end
 
 """
-    get_SSCF_surface_reference_state!(q_tot, flight_number, forcing_type; thermodynamics_backend)
+    get_surface_reference_state!(q_tot, flight_number, forcing_type; thermodynamics_backend)
 
 In-place surface reference state at the reference timestep, `(; pg, Tg, q_tot_g)` scalars.
 `q_tot` is caller-supplied scratch for the vertical profile buffer.
 """
-get_SSCF_surface_reference_state!(
+get_surface_reference_state!(
     q_tot::AbstractArray,
     flight_number::Integer,
     forcing_type::AbstractForcingType;
@@ -55,7 +48,7 @@ get_SSCF_surface_reference_state!(
     get_surface_reference_state(flight_number, forcing_type, FT = Float64; thermodynamics_backend)
 
 Allocating surface reference state at the reference timestep: `(; pg, Tg, q_tot_g)` scalars.
-Loads the dataset once and forwards to [`get_SSCF_surface_reference_state!`](@ref).
+Loads the dataset once and forwards to [`get_surface_reference_state!`](@ref).
 """
 function get_surface_reference_state(
     flight_number::Integer,
@@ -75,16 +68,18 @@ end
     get_surface_forcing(flight_number, forcing_type,
                            interpolant_coord_types = Tuple{StepRangeLen, Nothing},
                            interpolant_value_types = Tuple{Vector, Float64};
-                           thermodynamics_backend)
+                           thermodynamics_backend, drop_collinear, bc)
 
 Time-dependent surface conditions from the reference timestep onward. Returns
-`(; pg, Tg, Tsfc, qg, qsfc)` — each field a built time interpolant (extrapolating BC).
+`(; pg, Tg, Tsfc, qg, qsfc)` — each field a built time interpolant
 
 The `Tuple{Backing, Eltype}` storage specs (as in [`get_column_forcing`](@ref)) are threaded through
 [`Interpolation.coerce_vector`](@ref) so the returned interpolants are type-stable and allocation-free
-to evaluate; the default coordinate spec stores the shared time axis as a `UniformRange` (O(1) lookup).
+to evaluate; the default coordinate spec stores the shared time axis as a `Base` range (O(1) lookup).
 `drop_collinear` prunes collinear nodes of the built interpolants; it must stay `false` with a
 range-backed coordinate spec (pruning would break the axis's uniformity).
+
+`bc` is the out-of-range policy the returned interpolants carry
 """
 function get_surface_forcing(
     flight_number::Integer,
@@ -93,6 +88,7 @@ function get_surface_forcing(
     ::Type{interpolant_value_types} = Tuple{Vector, Float64};
     thermodynamics_backend = DefaultThermodynamicsBackend(),
     drop_collinear::Val = Val(false),
+    bc::Interpolation.ValidBoundaryConditions = Interpolation.ExtrapolateBoundaryCondition(),
 ) where {interpolant_coord_types <: Tuple, interpolant_value_types <: Tuple}
     (; data, z_dim_num, time_dim_num, initial_ind, Tg_offset) = _surface_setup(flight_number, forcing_type)
 
@@ -101,7 +97,7 @@ function get_surface_forcing(
     Tg = Tg_orig .+ Tg_offset
 
     if Tg_offset < 0  # SST > Tg: SST sets qg going forward and serves as a source (use full Tg)
-        qg = calc_qg_from_pgTg.(thermodynamics_backend, pg, Tg)
+        qg = saturation_specific_humidity_from_pT.(thermodynamics_backend, pg, Tg)
     else # SST < Tg: stable BL, hold qg at the ambient-RH value (not the higher SST-saturation value)
         p = vec(Array(data["lev"]))
         q = NCDatasets.nomissing(
@@ -112,18 +108,17 @@ function get_surface_forcing(
         qg = map((pg_t, q_t) -> calc_qg_extrapolate_pq(pg_t, p, q_t), pg, q)
     end
 
-    qg_orig = calc_qg_from_pgTg.(thermodynamics_backend, pg, Tg_orig) # q* at the actual SST
+    qg_orig = saturation_specific_humidity_from_pT.(thermodynamics_backend, pg, Tg_orig) # q* at the actual SST
 
     tg = vec(Array(data["tsec"]))[initial_ind:end]
     tg = tg .- tg[1] # start at t = 0 so the interpolants are model-clock aligned
 
     # Coerce the shared time axis and each value series into the requested storage (backing, eltype) before
     # building — so the returned interpolants are type-stable and allocation-free to evaluate. The default
-    # coordinate spec stores `tg` as a `UniformRange`, giving O(1) lookups instead of a binary search.
+    # coordinate spec stores `tg` as a UniformRange, giving O(1) lookups instead of a binary search.
     coord_conv = Base.Fix1(Interpolation.coerce_vector, interpolant_coord_types)
     value_conv = Base.Fix1(Interpolation.coerce_vector, interpolant_value_types)
     tg = coord_conv(tg)
-    bc = Interpolation.ExtrapolateBoundaryCondition()
     return (;
         pg = Interpolation.build_spline(Interpolation.FastLinear1DInterpolation, tg, value_conv(pg); bc, drop_collinear),
         Tg = Interpolation.build_spline(Interpolation.FastLinear1DInterpolation, tg, value_conv(Tg); bc, drop_collinear),
@@ -138,7 +133,7 @@ end
 # --- selectable forcing outputs (extensible via `Val{:symbol}` dispatch, no per-field types) ---- #
 # Every field `get_column_forcing` can produce; a caller's `forcing_variables` must be a subset.
 # Add an output by listing its `:symbol` here and defining `compute(::Val{:symbol}, base, tb)` (and,
-# if it deviates from the defaults, `output_source` / `output_interp_kwargs` / `output_positive`).
+# if it deviates from the defaults, `output_source` / `output_z_regrid_opts` / `output_positive`).
 # `base` is the shared column precompute NamedTuple (data, dims, T/p/q, pg/Tg/qg, ρ, ground_indices, FT).
 """
     supported_forcing_variables
@@ -155,10 +150,25 @@ output_source(::Val) = :atlas_input
 output_source(::Val{:dTdt_rad}) = :les_output
 
 # per-output conservative-regrid recipe (defaults + the few that deviate)
-output_interp_kwargs(::Val) = (;)
-output_interp_kwargs(::Val{:H_nudge}) = (; f_enhancement_factor = 5, f_p_enhancement_factor = 8) # keep sharp inversions (not too high -> cusps)
-output_interp_kwargs(::Val{:qt_nudge}) = (; f_enhancement_factor = 6, f_p_enhancement_factor = 8) # keep sharp inversions
-output_interp_kwargs(::Val{:subsidence}) = (; f_enhancement_factor = 1, f_p_enhancement_factor = 1) # gentle changes; accuracy loss ok
+_with_enhancement(z::RegriddingOpts, f::Int, f_p::Int) =
+    isnothing(z.conservative) ? z :
+    RegriddingOpts(z.method, z.bc, ConservativeRegridingOpts(z.conservative.k, f, f_p, z.conservative.kwargs), z.drop_collinear)
+
+_with_positivity(z::RegriddingOpts, enforce::Bool) =
+    isnothing(z.conservative) ? z :
+    RegriddingOpts(
+        z.method, z.bc,
+        ConservativeRegridingOpts(
+            z.conservative.k, z.conservative.f_enhancement_factor, z.conservative.f_p_enhancement_factor,
+            set_property(z.conservative.kwargs, :enforce_positivity, enforce),
+        ),
+        z.drop_collinear
+    )
+
+output_z_regrid_opts(::Val, z_regrid_opts::RegriddingOpts) = z_regrid_opts
+output_z_regrid_opts(::Val{:H_nudge}, z::RegriddingOpts) = _with_enhancement(z, 5, 8) # keep sharp inversions (not too high -> cusps)
+output_z_regrid_opts(::Val{:qt_nudge}, z::RegriddingOpts) = _with_enhancement(z, 6, 8) # keep sharp inversions
+output_z_regrid_opts(::Val{:subsidence}, z::RegriddingOpts) = _with_enhancement(z, 1, 1) # gentle changes; accuracy loss ok
 
 output_positive(::Val) = false
 output_positive(::Val{:H_nudge}) = true # θ_liq_ice is positive-definite
@@ -185,10 +195,10 @@ compute(::Val{:subsidence}, base, tb) =
 
 # Working float type from a value storage spec `Tuple{Backing, Eltype}`: the eltype, or `Float64` when the
 # eltype knob is `Nothing` (as-read; NetCDF reads Float64). Drives thermo/A-matrices/materialized arrays.
-_itp_value_eltype(::Type{<:Tuple{Any, Nothing}}) = Float64 
+_itp_value_eltype(::Type{<:Tuple{Any, Nothing}}) = Float64
 _itp_value_eltype(::Type{Tuple{CT,VT}}) where {CT,VT} = VT
 
-_itp_coord_eltype(::Type{Tuple{CT,VT}}) where {CT,VT} = CT
+_itp_coord_backing(::Type{Tuple{CT, VT}}) where {CT, VT} = CT
 
 
 """
@@ -205,11 +215,9 @@ _itp_coord_eltype(::Type{Tuple{CT,VT}}) where {CT,VT} = CT
         use_LES_output_for_z = false,
         return_old_z = false,
         fail_on_missing_data = true,
-        conservative_interp = false,
-        conservative_interp_kwargs = Interpolation.default_conservative_interp_kwargs,
-        drop_collinear = Val(false),
-        A_cache = Dict{DataType, Matrix{FT}}(),
-        Af_cache = Dict{DataType, LinearAlgebra.Factorization{FT}}(),
+        z_regrid_opts = RegriddingOpts(),
+        t_regrid_opts = RegriddingOpts(),
+        mass_matrix_cache = MassMatrixCache{FT}(),
     )
 
 Build column forcing for a SOCRATES flight and [`AbstractForcingType`](@ref) (`ObsForcing()` / `ERA5Forcing()`).
@@ -226,6 +234,10 @@ Winds, subsidence, and geostrophic fields are always ERA5-sourced; nudging targe
 advective tendencies follow `forcing_type`. Equilibrium-derived quantities use
 `thermodynamics_backend` (default [`DefaultThermodynamicsBackend`](@ref); pass
 `ThermodynamicsParameters` with `Thermodynamics.jl` loaded for accurate physics).
+
+The two regrid stages are configured independently: `z_regrid_opts` ([`RegriddingOpts`](@ref))
+sets the method, boundary condition and optional conservative recipe for the evaluation onto `new_z`;
+`t_regrid_opts` ([`RegriddingOpts`](@ref)) does the same for time.
 """
 function get_column_forcing(
     flight_number::FNT,
@@ -241,28 +253,18 @@ function get_column_forcing(
     use_LES_output_for_z::Bool = false,
     return_old_z::Bool = false,
     fail_on_missing_data::Bool = true,
-    conservative_interp::Bool = false, # off by default
-    conservative_interp_kwargs::Interpolation.DCIKT = Interpolation.default_conservative_interp_kwargs,
-    # Prune collinear nodes of the built (returned) time-spline interpolants. Off by default: pruning is
-    # an exact (value-preserving) size optimization but yields per-length node sets, so pass `Val(true)`
-    # only with a length-invariant backing (e.g. `Vector`) where the result stays concrete.
-    drop_collinear::Val = Val(false),
-    # Reusable (across calls) conservative-interp caches, concretely typed: keyed by interpolation
-    # *method type* (concrete `DataType`), holding the FT mass matrix and its LU factorization. `A`'s
-    # eltype follows the target grid; stored as `Matrix{FT}` (a no-op when the grid is already `FT`).
-    A_cache::Dict{DataType, Matrix{FT}} = Dict{DataType, Matrix{FT}}(),
-    # `factorize` (kept for its adaptivity — e.g. Bunch-Kaufman on a symmetric mass matrix) can return
-    # different factorization kinds, so the value is typed `Factorization{FT}`: concrete in precision,
-    # abstract only in kind (one `\` dispatch per field at solve time — negligible).
-    Af_cache::Dict{DataType, LinearAlgebra.Factorization{FT}} = Dict{DataType, LinearAlgebra.Factorization{FT}}(),
+    z_regrid_opts::RegriddingOpts = RegriddingOpts(),
+    t_regrid_opts::RegriddingOpts = RegriddingOpts(),
+    mass_matrix_cache::MassMatrixCache{FT} = MassMatrixCache{FT}(),
 ) where {FNT <: Integer, interpolant_coord_types <: Tuple, interpolant_value_types <: Tuple, FT, NFV}
     # working float type = the value storage's eltype (thermo, A matrices, materialized arrays). `Nothing`
     # (as-read) resolves to Float64 (the NetCDF read type).
     # `enforce_positivity` is a property of the conservative interpolation (not the forcing_type). Only
     # `qt_nudge` and `H_nudge` are positive-definite, so we default it off here and re-enable it for
     # just those two below.
-    enforce_positivity = conservative_interp_kwargs[:enforce_positivity]
-    conservative_interp_kwargs = set_property(conservative_interp_kwargs, :enforce_positivity, false)
+    enforce_positivity = isnothing(z_regrid_opts.conservative) ? false : z_regrid_opts.conservative.kwargs[:enforce_positivity]
+    z_regrid_opts = _with_positivity(z_regrid_opts, false)
+
 
     # `forcing_variables` is the single source of truth: it selects which per-field grids are built,
     # which fields are actually computed, and the returned NamedTuple. Reject anything we can't produce.
@@ -289,26 +291,6 @@ function get_column_forcing(
     z_dim_num = dim_num("lev", data["T"])
     time_dim_num = dim_num("time", data["T"])
 
-    # === conservative mass-response matrix cache ================================================== #
-    # A (and its factorization) are expensive integrals; compute once per interpolation method and
-    # reuse across fields (and across calls, via the passed-in caches). `_AAf` is a no-op returning
-    # `(nothing, nothing)` unless `conservative_interp` is set; otherwise it self-seeds from the
-    # requesting field's grid. Keyed by method *type* (concrete `DataType`), and it returns the values
-    # read back from the caches so they carry the concrete cache eltype (`Matrix{FT}` / its `LU`).
-    function _AAf(A_cache, Af_cache, name, method)
-        conservative_interp || return (nothing, nothing)
-        key = typeof(method)
-        if !haskey(A_cache, key)
-            A_cache[key] = Interpolation.conservative_mass_matrix(
-                new_z[name];
-                method = method,
-                k = 1,
-                bc = Interpolation.ExtrapolateBoundaryCondition(),
-            )
-            Af_cache[key] = LinearAlgebra.factorize(A_cache[key])
-        end
-        return (A_cache[key], Af_cache[key])
-    end
 
     computed = (;) # accumulate only the requested fields (concrete-typed), reordered at return
 
@@ -317,27 +299,24 @@ function get_column_forcing(
     needs_column = return_old_z || any(v -> output_source(Val(v)) === :atlas_input, forcing_variables)
     if needs_column
         # p,T,q — materialize once into Array{FT} so downstream broadcasts fuse over plain arrays
-        p = align_along_dimension(_materialize(data["lev"]), z_dim_num)
-        pg = _materialize(data["Ps"])
-        T = _materialize(data["T"]) # NOTE: Atlas stores the liquid-ice temperature T_L here, not the actual T
-        Tg = _materialize(data["Tg"])
-        q = wt_to_qt!(_materialize(data["q"])) # mixing ratio -> specific humidity, in place on the owned copy
+        p = align_along_dimension(_materialize(data["lev"], interpolant_value_types.parameters[2]), z_dim_num)
+        pg = _materialize(data["Ps"], interpolant_value_types.parameters[2])
+        T = _materialize(data["T"], interpolant_value_types.parameters[2]) # NOTE: Atlas stores the liquid-ice temperature T_L here, not the actual T
+        Tg = _materialize(data["Tg"], interpolant_value_types.parameters[2])
+        q = wt_to_qt!(_materialize(data["q"], interpolant_value_types.parameters[2])) # mixing ratio -> specific humidity, in place on the owned copy
 
-        # Recover the ACTUAL state from the Atlas liquid-ice temperature `T_L`: total water is conserved,
-        # so saturation-adjust `(p, θ_liq_ice ≈ dry_pottemp(T_L), q_tot)` to the equilibrium
-        # `(T, q_liq, q_ice)`. This reproduces the original pipeline's phase-equilibrium state; without it
-        # the altitude integration uses `T_L` for `T` (biasing `z` at saturated levels) and density
-        # ignores the condensate loading (`q_vap = q_tot - q_liq - q_ice`). `q_tot` is unchanged.
-        _state = saturation_adjust_pθq.(thermodynamics_backend, p, dry_pottemp.(thermodynamics_backend, T, p), q)
+        _state = saturation_adjust_pθq.(
+            thermodynamics_backend, p, dry_pottemp.(thermodynamics_backend, T, p), q; λ = one(eltype(T)), # really this should be (qt-qi) so saturation adjusment is accurate
+        )
         T = map(s -> s.T, _state)      # actual temperature
         q_liq = map(s -> s.q_liq, _state)  # equilibrium liquid (condensate-aware density)
         q_ice = map(s -> s.q_ice, _state)  # equilibrium ice
 
         # add the ΔT from the summary table (Atlas §3: really T_2m - SST; table 2 has the sign backwards)
-        Tg_orig = Tg # SST; Tg is reassigned to a fresh array below (never mutated), so an alias is safe
-        Tg_offset = get_Tg_offset(flight_number)
+        Tg_orig = Tg # SST, kept for the qg branch below
+        Tg_offset = get_Tg_offset(flight_number, interpolant_value_types.parameters[2])
 
-        @. Tg += Tg_offset
+        Tg = Tg_orig .+ Tg_offset
 
         if Tg_offset < 0  # SST > Tg, assume Tg limits moisture below last known point and just extrapolate
             qg = calc_qg_extrapolate_pq.(
@@ -346,7 +325,7 @@ function get_column_forcing(
                 align_along_dimension(vec.(collect(eachslice(Array(q); dims = time_dim_num))), z_dim_num),
             ) # pg is a scalar-per-column, p is a fixed profile, q slices in z are aligned along time to match pg's shape
         else # Tg > SST, assume SST sets moisture below last known point
-            qg = calc_qg_from_pgTg.(thermodynamics_backend, pg, Tg_orig) # SST (Tg_orig) sets qg below the last known point
+            qg = saturation_specific_humidity_from_pT.(thermodynamics_backend, pg, Tg_orig) # SST (Tg_orig) sets qg below the last known point
         end
 
         p_grid = add_dim(align_along_dimension(p, z_dim_num), time_dim_num)
@@ -373,6 +352,7 @@ function get_column_forcing(
                 qg;
                 data = data,
                 thermodynamics_backend = thermodynamics_backend,
+                ground_indices = ground_indices,
             )
         else
             z_old = lev_to_z_from_LES_output(
@@ -410,33 +390,26 @@ function get_column_forcing(
         # regridding folds in per-field `f_enhancement`), and only when every atlas field shares one grid;
         # otherwise `nothing` → each field computes its own denominator (bit-identical to no hoisting). This
         # is a typed local (not an `Any` cache): ρ is data that changes every call, so there is nothing to
-        # reuse across calls (unlike the grid-only `A_cache`/`Af_cache`).
+        # reuse across calls (unlike the grid-keyed `mass_matrix_cache`).
         _atlas_vars = filter(v -> output_source(Val(v)) === :atlas_input, forcing_variables)
         weight_regridded_shared =
-            (!conservative_interp && !isempty(_atlas_vars) &&
+            (isnothing(z_regrid_opts.conservative) && !isempty(_atlas_vars) &&
              all(v -> new_z[v] === new_z[first(_atlas_vars)], _atlas_vars)) ?
             regrid_to_z_and_time(
                 ρ, new_z[first(_atlas_vars)], z_dim_num, time_dim_num, flight_number,
                 interpolant_coord_types, interpolant_value_types;
                 z_old = z_old, data = data, thermodynamics_backend, initial_condition,
-                weight = nothing, conservative_interp = false,
-                conservative_interp_kwargs = conservative_interp_kwargs,
+                weight = nothing,
+                z_regrid_opts = z_regrid_opts,
+                t_regrid_opts = t_regrid_opts,
                 return_after_z_interp = true,
             ) : nothing
 
         # regrid one already-assembled column field onto its requested grid (+ time splines if not
         # initial_condition). By default we conservatively interpolate and weight by density — slightly
         # diffusive even for intensive variables, but it rounds corners and conserves mass.
-        function _regrid(
-            field,
-            name;
-            interp_method = Interpolation.FastLinear1DInterpolation,
-            interp_kwargs = (;),
-            cons_kwargs = conservative_interp_kwargs,
-            A_cache = A_cache,
-            Af_cache = Af_cache,
-        )
-            A, Af = _AAf(A_cache, Af_cache, name, interp_method)
+        function _regrid(field, name; z_regrid_opts = z_regrid_opts, cache = mass_matrix_cache)
+            A, Af = mass_matrix!(cache, new_z[name], z_regrid_opts)
             return regrid_to_z_and_time(
                 field,
                 new_z[name],
@@ -449,11 +422,8 @@ function get_column_forcing(
                 data = data,
                 thermodynamics_backend,
                 initial_condition,
-                interp_method = interp_method,
-                interp_kwargs = interp_kwargs,
-                drop_collinear = drop_collinear,
-                conservative_interp = conservative_interp,
-                conservative_interp_kwargs = cons_kwargs,
+                z_regrid_opts = z_regrid_opts,
+                t_regrid_opts = t_regrid_opts,
                 weight = ρ,
                 weight_regridded = weight_regridded_shared,
                 A = A,
@@ -467,33 +437,26 @@ function get_column_forcing(
 
         # compute + regrid each requested :atlas_input output via Val-dispatch on its symbol; the
         # `compute` methods above assemble each pre-regrid field from `base`, and
-        # output_interp_kwargs / output_positive give its per-field regrid recipe.
+        # output_z_regrid_opts / output_positive give its per-field regrid recipe.
         for v in forcing_variables
             output_source(Val(v)) === :atlas_input || continue
             field = compute(Val(v), base, thermodynamics_backend)
-            cons =
-                output_positive(Val(v)) ?
-                set_property(conservative_interp_kwargs, :enforce_positivity, enforce_positivity) :
-                conservative_interp_kwargs
-            computed = merge(
-                computed,
-                NamedTuple{(v,)}((_regrid(field, v; interp_kwargs = output_interp_kwargs(Val(v)), cons_kwargs = cons),)),
-            )
+            z_v = output_z_regrid_opts(Val(v), z_regrid_opts)
+            output_positive(Val(v)) && (z_v = _with_positivity(z_v, enforce_positivity))
+            computed = merge(computed, NamedTuple{(v,)}((_regrid(field, v; z_regrid_opts = z_v),)))
         end
     end
 
     # === LES-sourced field: dTdt_rad ============================================================== #
     if :dTdt_rad in forcing_variables
         LES_data = open_atlas_les_output(flight_number, forcing_type).data
-        # `_materialize` bulk-loads the lazy CFVariable ONCE (the package's standard NC boundary helper);
-        # operating on the lazy variable directly indexes it element-by-element (per-element allocation,
-        # the same trap as `combine`).
-        dTdt_rad = _materialize(LES_data["RADQR"]) ./ (FT(24) * FT(3600)) # K/day -> K/s (drops nc dim metadata, yields Array)
+        les_source = LESOutput(forcing_type)
+        dTdt_rad = convert_to_SI_units(LES_data, "RADQR", les_source)
         z_dim_num_LES = dim_num("z", LES_data["RADQR"]) # assume same for all LES 2D vars
         time_dim_num_LES = dim_num("time", LES_data["RADQR"])
-        ρ_LES = _materialize(LES_data["RHO"])
+        ρ_LES = convert_to_SI_units(LES_data, "RHO", les_source)
 
-        A, Af = _AAf(A_cache, Af_cache, :dTdt_rad, Interpolation.FastLinear1DInterpolation)
+        A, Af = mass_matrix!(mass_matrix_cache, new_z[:dTdt_rad], z_regrid_opts)
         dTdt_rad = regrid_to_z_and_time(
             dTdt_rad,
             new_z[:dTdt_rad],
@@ -503,13 +466,11 @@ function get_column_forcing(
             interpolant_coord_types,
             interpolant_value_types;
             source = LESOutput(forcing_type),
-            interp_kwargs = (; bc = Interpolation.ExtrapolateBoundaryCondition()), # RF09 LES ran on a different grid -> extrapolate
+            z_regrid_opts = z_regrid_opts,
+            t_regrid_opts = t_regrid_opts,
             z_old = nothing,
             data = LES_data,
             initial_condition,
-            drop_collinear = drop_collinear,
-            conservative_interp = conservative_interp,
-            conservative_interp_kwargs = conservative_interp_kwargs, # can be negative
             weight = ρ_LES, # mass-weighted conservative regrid
             A = A,
             Af = Af,
@@ -538,8 +499,8 @@ function _column_subsidence(
     # does not pass through `combine_air_and_ground_data`'s materialize guard), so leaving it lazy pushes a
     # `CFVariable`/`ReshapedDiskArray` into the subsidence broadcast — whose eltype infers to `Any` on some
     # Julia versions, breaking downstream. Loading once here also avoids lazy per-element disk reads.
-    ω = _materialize(data["omega"])
-    dpdt_g = _materialize(data["Ptend"])
+    ω = _materialize(data["omega"], FT)
+    dpdt_g = _materialize(data["Ptend"], FT)
     dpdt_g = add_dim(dpdt_g, z_dim_num) # should be lon lat lev time (hopefully order was already correct)
     ω = combine_air_and_ground_data(ω, dpdt_g, z_dim_num; insert_location = ground_indices)
 
@@ -577,7 +538,7 @@ end
 
 Return the Atlas default vertical grid vector for `flight_number` (from `open_atlas_les_grid`).
 """
-function default_new_z(flight_number::Int;)
+function default_new_z(flight_number::Int)
     data = open_atlas_les_grid(flight_number)
     new_z = data[:grid_data]
     return new_z

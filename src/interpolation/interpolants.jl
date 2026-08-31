@@ -75,20 +75,29 @@ _coerce_storage(::Type{<:AbstractRange}, ::Type{E}, v::AbstractVector) where {E}
 # Build an exactly-uniform range spanning `v` (for a known-uniform axis, e.g. the Atlas hourly time axis).
 # Uses EXACT step equality (integer/exact), NOT a float tolerance — the range makes interval search O(1).
 
-function _coerce_uniform_range(::Type{T}, v::AbstractVector{FT}, check_values::Bool = true; tol::FT = zero(FT)) where {T, FT} # could use ::Val{check_values} instead of check_values::Bool
+"""
+    _uniform_axis_params(v; tol = 0, check_values = true) -> (x0, step, n)
+
+First node, spacing and length of a uniform axis, validating the spacing. `tol == 0` demands exact
+equality, which is what a range backing needs: its O(1) index arithmetic is correct only on an
+exactly-uniform axis. Shared by every path that turns a vector into a range backing.
+"""
+function _uniform_axis_params(v::AbstractVector{FT}; tol::FT = zero(FT), check_values::Bool = true) where {FT}
     n = length(v)
     n <= 1 && error("coerce_vector to a range needs ≥ 2 nodes (got $n)")
     @inbounds x0 = v[1]
     @inbounds s = v[2] - v[1]
     if check_values
         @inbounds for i in 3:n
-            if iszero(tol)
-                (v[i] - v[i - 1]) == s || error("coerce_vector to a range requires an exactly-uniform axis (non-uniform spacing at index $i)")
-            else
-                abs(v[i] - v[i - 1]) - s <= tol || error("coerce_vector to a range requires an exactly-uniform axis (non-uniform spacing at index $i)")
-            end
+            uniform = iszero(tol) ? ((v[i] - v[i - 1]) == s) : (abs((v[i] - v[i - 1]) - s) <= tol)
+            uniform || error("coerce_vector to a range requires an exactly-uniform axis (non-uniform spacing at index $i)")
         end
     end
+    return (; start = x0, step = s, length = n)
+end
+
+function _coerce_uniform_range(::Type{T}, v::AbstractVector{FT}, check_values::Bool = true; tol::FT = zero(FT)) where {T, FT} # could use ::Val{check_values} instead of check_values::Bool
+    (x0, s, n) = _uniform_axis_params(v; tol = tol, check_values = check_values)
     return range(T(x0); step = T(s), length = n)
 end
 function _coerce_uniform_range(v::AbstractVector{FT}, check_values::Bool = true; tol::FT = zero(FT)) where {FT} # could use ::Val{check_values} instead of check_values::Bool
@@ -229,11 +238,12 @@ end
 # `drop_collinear` is a `Val` so the choice is a compile-time constant: `Val(false)` dispatches to the
 # identity (no pruning) — type-stable, allocation-free, and required for a range `xp`. `Val(true)` is the
 # cold pruning path (its result length/type depends on the data).
-@inline _maybe_prune(::Val{false}, xp, fp) = (xp, fp)
-@inline _maybe_prune(::Val{true}, xp, fp) = length(xp) > 2 ? drop_collinear_nodes(xp, fp) : (xp, fp)
+@inline _maybe_prune(::Val{false}, xp, fp, collinear_tol = promote_type(eltype(xp), eltype(fp))(NaN)) = (xp, fp)
+@inline _maybe_prune(::Val{true}, xp, fp, collinear_tol = promote_type(eltype(xp), eltype(fp))(NaN)) =
+    length(xp) > 2 ? drop_collinear_nodes(xp, fp; collinear_tol = collinear_tol) : (xp, fp)
 
 """
-    Fast1DLinearInterpolant(xp, fp; bc, drop_collinear = Val(false))
+    Fast1DLinearInterpolant(xp, fp; bc, drop_collinear = Val(false), collinear_tol = 0)
 
 Build a piecewise-linear interpolant on nodes `(xp, fp)` (equal length). This primitive is
 backing/eltype-PRESERVING — it stores exactly the `xp`/`fp` it is given (a range `xp` stays a range,
@@ -244,16 +254,19 @@ When `drop_collinear = Val(true)`, collinear interior nodes are pruned via [`dro
 preserves each node backing (`Vector -> Vector`, `SVector{N} -> SVector{keep}`). The pruned length depends
 on the node *data*, so for length-typed backings (`SVector`) construction is type-unstable and allocates
 at build time (a cold path). Use `drop_collinear = Val(false)` for the non-allocating, type-stable path (and
-required for a range `xp`, since pruning would break the range).
+required for a range `xp`, since pruning would break the range). `collinear_tol` is the tolerance the
+collinearity test uses, exact (zero) by default; [`collinear_rounding_tol`](@ref) gives the value below
+which the test's two cross products are indistinguishable in floating point.
 """
 function Fast1DLinearInterpolant(
     xp::AbstractVector,
     fp::AbstractVector;
     bc::BCT = ErrorBoundaryCondition(),
     drop_collinear::Val = Val(false),
+    collinear_tol = promote_type(eltype(xp), eltype(fp))(NaN)
 ) where {BCT <: ValidBoundaryConditions}
     @assert length(xp) == length(fp) "xp and fp must have the same length"
-    xk, fk = _maybe_prune(drop_collinear, xp, fp)
+    xk, fk = _maybe_prune(drop_collinear, xp, fp, collinear_tol)
     return Fast1DLinearInterpolant{typeof(xk), typeof(fk), BCT}(xk, fk, bc)
 end
 
@@ -347,17 +360,20 @@ end
 """
     UniformRange(start, step, length)
 
-A custom range type that is exactly uniform.
-Julia default StepRangeLen comes with twiceprecision arithmtic that massively inflates inference times.
-TODO :: Agent fill in the rest of this and the actual implementation
+An exactly-uniform `AbstractRange` of `length` nodes beginning at `start`, caching `inv(step)` so
+evaluation locates an interval with a multiply rather than a search. `Base.StepRangeLen` carries
+twice-precision arithmetic, whose extra element types inflate inference time on the interpolant.
 """
-struct UniformRange{T, LT <: Integer} <: AbstractRange{T}
+struct UniformRange{T, LT <: Integer, IT} <: AbstractRange{T}
     start::T
     step::T
     length::LT
-    inv_step::T
+    inv_step::IT
 end
-UniformRange(start::T, step::T, length::LT) where {T, LT <: Integer} = UniformRange{T, LT}(start, step, length, inv(step))
+function UniformRange(start::T, step::T, length::LT) where {T, LT <: Integer}
+    inv_step = inv(step)
+    return UniformRange{T, LT, typeof(inv_step)}(start, step, length, inv_step)
+end
 Base.length(r::UniformRange) = Int(r.length)
 Base.size(r::UniformRange) = (Int(r.length),)
 Base.first(r::UniformRange) = r.start
@@ -419,15 +435,8 @@ end
 
 function _coerce_storage(::Type{UniformRange}, ::Type{E}, v::AbstractVector) where {E}
     T = _resolve_eltype(E, v)
-    n = length(v)
-    n >= 2 || error("UniformRange needs ≥ 2 nodes (got $n)")
-    @inbounds x0 = v[1]
-    @inbounds s = v[2] - v[1]
-    @inbounds for i in 3:n
-        (v[i] - v[i-1]) == s || error("UniformRange requires an exactly-uniform axis (non-uniform at index $i)")
-    end
-    return UniformRange(T(x0), T(s), n)
-
+    p = _uniform_axis_params(v)
+    return UniformRange(T(p.start), T(p.step), p.length)
 end
 
 # =============================== #
@@ -501,7 +510,7 @@ end
 
 
 function constantize_interpolant(itp::Fast1DLinearInterpolant, new_bc::ValidBoundaryConditions = itp.bc)
-    
+
     if (new_bc isa ExtrapolateBoundaryCondition) || (new_bc isa NearestBoundaryCondition)
         new_xp = Constant(itp.xp[1])
         new_fp = Constant(itp.fp[1])
@@ -520,11 +529,11 @@ end
 # Build the interpolant for `FastLinear1DInterpolationMethod`. Backing/eltype-preserving (stores what it's
 # given); the caller controls storage via [`coerce_vector`](@ref) upstream.
 """
-    build_spline(method, xp, fp; bc = ErrorBoundaryCondition(), drop_collinear = Val(true))
+    build_spline(method, xp, fp; bc = ErrorBoundaryCondition(), drop_collinear = Val(true), collinear_tol = 0)
 
 Build a 1D interpolant for `method` on nodes `(xp, fp)`. Default method is
-[`FastLinear1DInterpolation`](@ref). `drop_collinear` is a `Val`, so `Val(false)` keeps construction
-type-stable and allocation-free (and is required for a range-backed `xp`).
+[`FastLinear1DInterpolation`](@ref). `collinear_tol` is the tolerance the pruning test uses when
+`drop_collinear = Val(true)`, exact (zero) by default.
 """
 function build_spline(
     ::FastLinear1DInterpolationMethod,
@@ -532,8 +541,9 @@ function build_spline(
     fp::AbstractVector;
     bc::BCT = ErrorBoundaryCondition(),
     drop_collinear::Val = Val(true),
+    collinear_tol = promote_type(eltype(xp), eltype(fp))(NaN) # defaults to collinear_rounding_tol
 ) where {BCT <: ValidBoundaryConditions}
-    return Fast1DLinearInterpolant(xp, fp; bc = bc, drop_collinear = drop_collinear)
+    return Fast1DLinearInterpolant(xp, fp; bc = bc, drop_collinear = drop_collinear, collinear_tol = collinear_tol)
 end
 
 # --------------------------------------------------------------------------------------------------------------------------------------------- #
@@ -571,14 +581,28 @@ end
 # ============================================================================================================================================= #
 # Node pruning / shared-node coercion (operate on the interpolant's stored nodes)
 
-# exact, division-free collinearity test for the middle point (b) of (a,b,c):
-# slope(a,b) == slope(b,c)  <=>  (yb-ya)*(xc-xb) == (yc-yb)*(xb-xa)
-@inline _is_collinear(xa, ya, xb, yb, xc, yc) = (yb - ya) * (xc - xb) == (yc - yb) * (xb - xa)
+"""
+    collinear_rounding_tol(xa, ya, xb, yb, xc, yc)
+
+Tolerance [same units as the cross products] below which [`_is_collinear`](@ref)'s two cross products
+are indistinguishable from each other in floating point. `yb - ya` cancels, so the error of each
+product scales with the operand magnitudes rather than with the product; this is that bound. Exact
+arithmetic gives an exactly-zero difference and so is unaffected by it.
+"""
+@inline collinear_rounding_tol(xa, ya, xb, yb, xc, yc) =
+    eps(float(promote_type(typeof(ya), typeof(xa)))) *
+    (abs(ya) + abs(yb) + abs(yc)) * (abs(xa) + abs(xb) + abs(xc))
+
+# `tol = NaN` selects [`collinear_rounding_tol`](@ref) for this triple; any other value is used as given.
+@inline function _is_collinear(xa, ya, xb, yb, xc, yc, tol = promote_type(eltype(xa), eltype(ya), eltype(xb), eltype(yb), eltype(xc), eltype(yc))(NaN))
+    d = (yb - ya) * (xc - xb) - (yc - yb) * (xb - xa)
+    return abs(d) <= (isnan(tol) ? collinear_rounding_tol(xa, ya, xb, yb, xc, yc) : tol)
+end
 
 # Keep node `i` of `n`? Endpoints always; interior nodes only if they bend the line. Shared by every
 # `drop_collinear_nodes` method (the `i==1 || i==n` short-circuit guards the neighbor accesses).
-@inline _keep_node(x, y, i, n) =
-    i == 1 || i == n || !_is_collinear(x[i - 1], y[i - 1], x[i], y[i], x[i + 1], y[i + 1])
+@inline _keep_node(x, y, i, n, tol = eltype(promote_type(eltype(x), eltype(y)))(NaN)) =
+    i == 1 || i == n || !_is_collinear(x[i - 1], y[i - 1], x[i], y[i], x[i + 1], y[i + 1], tol)
 
 """
     drop_collinear_nodes(x, y) -> (x_kept, y_kept)
@@ -596,7 +620,7 @@ collinearity keep-mask depends on BOTH `x` and `y`, so it is threaded into each 
 only the endpoints survive) and errors otherwise — the honest boundary instead of a silent demotion to
 an allocating `Vector`.
 """
-function drop_collinear_nodes(x::AbstractVector, y::AbstractVector)
+function drop_collinear_nodes(x::AbstractVector{FT}, y::AbstractVector; collinear_tol = FT(0)) where {FT}
     n = length(x)
     @assert length(y) == n "x and y must have equal length"
     n <= 2 && return (x, y)
@@ -604,25 +628,25 @@ function drop_collinear_nodes(x::AbstractVector, y::AbstractVector)
     # count kept nodes once (endpoints + interior bends); this mask is shared by both per-array prunes
     keep = 0
     @inbounds for i in 1:n
-        _keep_node(x, y, i, n) && (keep += 1)
+        _keep_node(x, y, i, n, collinear_tol) && (keep += 1)
     end
     keep == n && return (x, y) # nothing collinear -> both backings preserved trivially
 
     # materialize each side INDEPENDENTLY in its own backing (x's backing never forces y's, and vice versa)
-    return (_prune_backing(x, x, y, keep), _prune_backing(y, x, y, keep))
+    return (_prune_backing(x, x, y, keep, collinear_tol), _prune_backing(y, x, y, keep, collinear_tol))
 end
 
 # Prune array `v` to the `keep` nodes kept by the `(x, y)` collinearity mask, dispatched on `v`'s backing
 # so `x` and `y` are pruned independently in their own storage families.
 
 # default (Vector, and any backing whose `similar(v, keep)` returns its own type): exact-size fill.
-function _prune_backing(v::AbstractVector, x, y, keep)
+function _prune_backing(v::AbstractVector{FT}, x, y, keep, tol = FT(0)) where {FT}
     n = length(v)
     out = similar(v, keep)
     @inbounds begin
         j = 0
         for i in 1:n
-            if _keep_node(x, y, i, n)
+            if _keep_node(x, y, i, n, tol)
                 j += 1
                 out[j] = v[i]
             end
@@ -636,10 +660,10 @@ end
 # cold path), but the payoff is a SHORTER static vector: cheaper at use time and kinder to the compiler
 # than a long one. The `Val(keep)` dispatch is the single, unavoidable runtime->type boundary; `sacollect`
 # then gathers the kept indices into `SVector{K,Int}` and SVector-indexing returns `SVector{K}`.
-_prune_backing(v::StaticArrays.SVector, x, y, keep) = _prune_svector(Val(keep), v, x, y)
-@inline function _prune_svector(::Val{K}, v, x, y) where {K}
+_prune_backing(v::StaticArrays.SVector, x, y, keep, tol) = _prune_svector(Val(keep), v, x, y, tol)
+@inline function _prune_svector(::Val{K}, v, x, y, tol) where {K}
     n = length(v)
-    idx = StaticArrays.sacollect(StaticArrays.SVector{K, Int}, i for i in 1:n if _keep_node(x, y, i, n))
+    idx = StaticArrays.sacollect(StaticArrays.SVector{K, Int}, i for i in 1:n if _keep_node(x, y, i, n, tol))
     return v[idx]
 end
 
@@ -649,13 +673,13 @@ end
 # demoting to a `Vector`. Endpoints are always kept, so `keep >= 2` in practice (`keep` is unused here — the
 # gaps are re-derived in one pass — but the signature matches the other `_prune_backing` methods). The
 # empty/singleton returns are defensive.
-function _prune_backing(v::AbstractRange, x, y, keep)
+function _prune_backing(v::AbstractRange, x, y, keep, tol = eltype(v)(0))
     n = length(v)
     i0 = 0    # first kept index
     prev = 0  # previous kept index
     Δ = 0     # constant kept-index gap
     @inbounds for i in 1:n
-        _keep_node(x, y, i, n) || continue
+        _keep_node(x, y, i, n, tol) || continue
         if i0 == 0
             i0 = prev = i
         elseif Δ == 0
@@ -678,24 +702,45 @@ end
 
 # Prune collinear interior nodes of a built linear interpolant, returning an equivalent interpolant
 # on the reduced node set (nodes already pruned, so no second pass).
-function drop_collinear_nodes(itp::Fast1DLinearInterpolant)
-    xp_kept, fp_kept = drop_collinear_nodes(itp.xp, itp.fp)
+function drop_collinear_nodes(itp::Fast1DLinearInterpolant; collinear_tol = promote_type(eltype(itp.xp), eltype(itp.fp))(NaN))
+    xp_kept, fp_kept = drop_collinear_nodes(itp.xp, itp.fp; collinear_tol = collinear_tol)
     return Fast1DLinearInterpolant(xp_kept, fp_kept; bc = itp.bc, drop_collinear = Val(false))
 end
 
 
 """
+    interpolant_nodes(itp)
+
+The abscissae a built interpolant is defined on.
+"""
+function interpolant_nodes end
+
+"""
+    rebuild_interpolant(itp, xs, ys)
+
+An interpolant of the same kind and boundary condition as `itp`, on nodes `xs` with values `ys`.
+"""
+function rebuild_interpolant end
+
+interpolant_nodes(itp::Fast1DLinearInterpolant) = itp.xp
+rebuild_interpolant(itp::Fast1DLinearInterpolant, xs, ys) =
+    Fast1DLinearInterpolant(xs, ys; bc = itp.bc, drop_collinear = Val(false))
+
+"""
     coerce_to_shared_nodes(itp_collection)
 
-Re-evaluate a collection of [`Fast1DLinearInterpolant`](@ref)s on a shared sorted node set.
+Rebuild every interpolant in the collection on the shared, sorted union of all their nodes, so the
+collection is defined on one common node vector and/or type.
+
+Works for any backend supplying [`interpolant_nodes`](@ref) and [`rebuild_interpolant`](@ref), and
+preserves the container type (`Vector`, `SVector`, `NTuple`).
 """
 function coerce_to_shared_nodes(itp_collection)
-    error("Not implemented")
+    xs = sort!(unique!(reduce(vcat, (collect(interpolant_nodes(itp)) for itp in itp_collection))))
+    return map(itp -> rebuild_interpolant(itp, xs, itp.(xs)), itp_collection)
 end
 
-# Rebuild every linear interpolant in the collection on the shared, sorted union of all their
-# nodes. Each rebuilt interpolant keeps its own boundary condition and retains every shared node
-# (`drop_collinear = Val(false)`) so the collection is defined on one common node vector.
+
 function coerce_to_shared_nodes(itp_collection::AbstractVector{T}) where {T <: Fast1DLinearInterpolant}
     xs = sort(unique(reduce(vcat, (itp.xp for itp in itp_collection))))
     return [Fast1DLinearInterpolant(xs, itp.(xs); bc = itp.bc, drop_collinear = Val(false)) for itp in itp_collection]
@@ -715,6 +760,8 @@ function coerce_to_shared_nodes(itp_collection::NTuple{N, <:Fast1DLinearInterpol
         Val(N),
     )
 end
+
+
 
 
 # ============================================================================================================================================= #

@@ -3,9 +3,7 @@ on:
   push:
     branches:
       - main
-      - trying
-      - staging
-    tags: '*'
+    tags: ['*']
   pull_request:
   workflow_dispatch:
 
@@ -17,7 +15,6 @@ jobs:
       fail-fast: false
       matrix:
         version:
-          - '1.10'
           - '1.11'
           - '1.12'
         os:
@@ -29,30 +26,12 @@ jobs:
     env:
       SSCF_SKIP_INTEGRATION_TESTS: 'false'  # run integration on every matrix job (data auto-downloads via lazy artifacts)
     steps:
-      - uses: actions/checkout@v4
-      - uses: julia-actions/setup-julia@v2
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
         with:
           version: ${{ matrix.version }}
           arch: ${{ matrix.arch }}
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
-      - uses: julia-actions/julia-processcoverage@v1
-      - uses: codecov/codecov-action@v4
         with:
-          files: lcov.info
-          token: ${{ secrets.CODECOV_TOKEN }}
-          fail_ci_if_error: false
-
-  integration:
-    name: integration (opt-in)
-    runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch'
-    steps:
-      - uses: actions/checkout@v4
-      - uses: julia-actions/setup-julia@v2
-        with:
-          version: '1.12'
-      - uses: julia-actions/julia-buildpkg@v1
-      - uses: julia-actions/julia-runtest@v1
-        with:
-          test_args: 'integration'
+          coverage: 'false'  # coverage is collected once, by CodeCov.yml

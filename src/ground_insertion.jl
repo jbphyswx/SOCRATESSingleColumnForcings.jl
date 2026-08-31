@@ -163,16 +163,32 @@ function combine_air_and_ground_data(
             vardatag = repeat(vardatag, repeat_ground...)
             insert_location_arr = repeat(insert_location_arr, repeat_insert...)
 
-            mapslice_func = function (vect) # write this way cause can't define func inside conditional unless anonymous?, see https://github.com/JuliaLang/julia/issues/15602 , https://stackoverflow.com/a/65660721
-                T = promote_type(typeof(vect[1]), typeof(vect[end - 1]))
-                vardata = T.(collect(vect[1:(end - 2)]))
-                vardatag = T(vect[end - 1])
-                insert_location = Int(vect[end]) # undo if was coerced to FT
-                # insert (a little more complicated now cause we aren't exactly getting the same size output... dont think that actually matters for mapslices...)
-                return insert!(vardata, insert_location, vardatag)
+            # Write each column straight into a preallocated output: the ground value at its own
+            # insertion index, the air values either side. Avoids catting the three arrays together
+            # and, per column, a slice copy plus an `insert!` that grows the vector.
+            T = promote_type(eltype(vardata), eltype(vardatag))
+            n_air = size(vardata, concat_dim)
+            out_sz = collect(size(vardata))
+            out_sz[concat_dim] = n_air + 1
+            out = Array{T}(undef, out_sz...)
+
+            column_dims = Tuple(d for d in 1:ndims(vardata) if d != concat_dim)
+            for (dst, air, ground, loc) in zip(
+                eachslice(out; dims = column_dims),
+                eachslice(vardata; dims = column_dims),
+                eachslice(vardatag; dims = column_dims),
+                eachslice(insert_location_arr; dims = column_dims),
+            )
+                k = Int(only(loc)) # undo if was coerced to FT
+                (1 ≤ k ≤ n_air + 1) ||
+                    error("insert_location $(k) is outside 1:$(n_air + 1) for a column of $(n_air) air values")
+                @inbounds begin
+                    copyto!(view(dst, 1:(k - 1)), view(air, 1:(k - 1)))
+                    dst[k] = T(only(ground))
+                    copyto!(view(dst, (k + 1):(n_air + 1)), view(air, k:n_air))
+                end
             end
-            vardata = cat(vardata, vardatag, insert_location_arr; dims = concat_dim)
-            vardata = mapslices(mapslice_func, vardata; dims = (concat_dim,))
+            vardata = out
         end
     else
         error("unsupported input type for variable insert_location") # catch what would otherwise silently fail and return vardata

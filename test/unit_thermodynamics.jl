@@ -19,9 +19,9 @@ Test.@testset "Thermodynamics (default backend)" begin
 
     Test.@testset "saturation vapor pressure over liquid" begin
         T_fr = SSCF.T_freeze(b)
-        Test.@test SSCF.saturation_vapor_pressure_liquid(b, T_fr) ≈ 611.2 rtol = 1e-6  # Clausius–Clapeyron anchor
-        Test.@test SSCF.saturation_vapor_pressure_liquid(b, 300.0) >
-                   SSCF.saturation_vapor_pressure_liquid(b, 280.0)                     # increasing in T
+        Test.@test SSCF.saturation_vapor_pressure_liq(b, T_fr) ≈ 611.2 rtol = 1e-6  # Clausius–Clapeyron anchor
+        Test.@test SSCF.saturation_vapor_pressure_liq(b, 300.0) >
+                   SSCF.saturation_vapor_pressure_liq(b, 280.0)                     # increasing in T
     end
 
     Test.@testset "liquid_fraction: 1 warm, 0 cold, linear between" begin
@@ -36,7 +36,7 @@ Test.@testset "Thermodynamics (default backend)" begin
         Test.@test qsat > 0 && qsat < 0.1
         # when e_sat ≥ p (very low pressure) the air cannot saturate: q* ≥ 1, never negative
         Test.@test SSCF.q_vap_saturation(b, 270.0, 100.0) ≥ 1.0
-        Test.@test SSCF.q_vap_saturation_liquid(b, 270.0, 100.0) ≥ 1.0
+        Test.@test SSCF.q_vap_saturation_liq(b, 270.0, 100.0) ≥ 1.0
     end
 
     Test.@testset "equilibrium_condensate: non-negative, bounded by q_tot" begin
@@ -82,10 +82,10 @@ Test.@testset "Thermodynamics (default backend)" begin
         # saturation *mixing ratio* at the surface (later converted to specific humidity by the pipeline)
         pg, Tg = 1.0e5, 288.0
         ε = SSCF.molmass_ratio(b)
-        e_s = SSCF.saturation_vapor_pressure_liquid(b, Tg)
-        w_s = SSCF.saturation_q_tot_from_pgTg(b, pg, Tg)
+        e_s = SSCF.saturation_vapor_pressure_liq(b, Tg)
+        w_s = SSCF.saturation_mixing_ratio_from_pT(b, pg, Tg)
         Test.@test isapprox(w_s, ε * e_s / (pg - e_s); rtol = 1e-12)   # exact mixing-ratio formula
         Test.@test 0.008 < w_s < 0.013                                # ~10.8 g/kg at 288 K / 1000 hPa
-        Test.@test w_s > SSCF.calc_qg_from_pgTg(b, pg, Tg)            # mixing ratio > specific humidity
+        Test.@test w_s > SSCF.saturation_specific_humidity_from_pT(b, pg, Tg)            # mixing ratio > specific humidity
     end
 end
