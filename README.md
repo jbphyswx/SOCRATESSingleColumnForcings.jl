@@ -111,7 +111,7 @@ forcing = SSCF.get_column_forcing(
 
 **Flights:** `flight_numbers = (1, 9, 10, 11, 12, 13)`. RF11 is ERA5-only; RF12/RF13 use 192-level grids; others use 320 levels.
 
-See [docs/forcings.md](docs/src/forcings.md) for the full `get_column_forcing` API, or the [Documenter site](https://jbphyswx.github.io/SOCRATESSingleColumnForcings.jl/dev/forcings/).
+See [docs/forcings.md](docs/src/forcings.md) for the full `get_column_forcing` API, or the [documentation website](https://jbphyswx.github.io/SOCRATESSingleColumnForcings.jl/dev/forcings/).
 
 ## Fast interpolation storage
 
