@@ -74,6 +74,9 @@ end
 if _run_unit_group("allocations")
     include("allocations.jl")
 end
+if _run_unit_group("plotting")
+    include("unit_plotting.jl")
+end
 
 if !_skip_integration()
     include("integration_forcings.jl")

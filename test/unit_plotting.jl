@@ -1,0 +1,1 @@
+using CairoMakie: CairoMakie  # activates the CairoMakie extension so plotting is exercised
