@@ -584,7 +584,7 @@ end
 """
     collinear_rounding_tol(xa, ya, xb, yb, xc, yc)
 
-Tolerance [same units as the cross products] below which [`_is_collinear`](@ref)'s two cross products
+Tolerance [same units as the cross products] below which the collinearity test's two cross products
 are indistinguishable from each other in floating point. `yb - ya` cancels, so the error of each
 product scales with the operand magnitudes rather than with the product; this is that bound. Exact
 arithmetic gives an exactly-zero difference and so is unaffected by it.

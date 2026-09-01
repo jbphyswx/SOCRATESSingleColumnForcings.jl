@@ -165,6 +165,13 @@ _with_positivity(z::RegriddingOpts, enforce::Bool) =
         z.drop_collinear
     )
 
+"""
+    output_z_regrid_opts(::Val{output}, z_regrid_opts)
+
+The [`RegriddingOpts`](@ref) used for one output field's regrid onto `new_z`, given the caller's
+`z_regrid_opts`. Defaults to the caller's; add a `Val{:symbol}` method for a field that needs its own
+recipe.
+"""
 output_z_regrid_opts(::Val, z_regrid_opts::RegriddingOpts) = z_regrid_opts
 output_z_regrid_opts(::Val{:H_nudge}, z::RegriddingOpts) = _with_enhancement(z, 5, 8) # keep sharp inversions (not too high -> cusps)
 output_z_regrid_opts(::Val{:qt_nudge}, z::RegriddingOpts) = _with_enhancement(z, 6, 8) # keep sharp inversions

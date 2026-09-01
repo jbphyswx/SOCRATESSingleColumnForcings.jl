@@ -5,6 +5,7 @@ using SOCRATESSingleColumnForcings: SOCRATESSingleColumnForcings, SOCRATESSingle
 api = Any[
     "Forcings" => "api/forcings.md",
     "Data I/O" => "api/io.md",
+    "Units and archive registry" => "api/units.md",
     "Interpolation" => "api/interpolation.md",
     "Thermodynamics" => "api/thermodynamics.md",
 ]

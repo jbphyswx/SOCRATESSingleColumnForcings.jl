@@ -101,9 +101,13 @@ function latent_heat_vapor end
 """Latent heat of sublimation at `T` [J/kg]."""
 function latent_heat_sublim end
 
+"""Supertype for the water phase a saturation quantity is taken over."""
 abstract type AbstractPhase end
+"""Water vapor."""
 struct Vapor <: AbstractPhase end
+"""Liquid water; saturation is taken over a plane liquid surface."""
 struct Liquid <: AbstractPhase end
+"""Ice; saturation is taken over a plane ice surface."""
 struct Ice <: AbstractPhase end
 
 # ============================================================================================ #
