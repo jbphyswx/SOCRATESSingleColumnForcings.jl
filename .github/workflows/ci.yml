@@ -21,8 +21,6 @@ jobs:
           - ubuntu-latest
           - macOS-latest
           - windows-latest
-        arch:
-          - x64
     env:
       SSCF_SKIP_INTEGRATION_TESTS: 'false'  # run integration on every matrix job (data auto-downloads via lazy artifacts)
     steps:
@@ -30,7 +28,6 @@ jobs:
       - uses: julia-actions/setup-julia@v3
         with:
           version: ${{ matrix.version }}
-          arch: ${{ matrix.arch }}
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
         with:
