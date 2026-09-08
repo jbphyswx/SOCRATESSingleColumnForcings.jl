@@ -60,6 +60,39 @@ Test.@testset "Boundary-condition plumbing" begin
         Test.@test all(itp -> itp.bc === want, built)
     end
 
+    Test.@testset "ConstantBoundaryCondition is honored, not just accepted" begin
+        # It is a member of `ValidBoundaryConditions`, so every signature takes it; each backend must
+        # actually return the value rather than error or silently contribute nothing.
+        xp = collect(0.0:1.0:4.0)
+        fp = @. 1.0 + 2.0 * xp
+        cbc = SSCF.Interpolation.create_bc("constant(-7.0)")
+        Test.@test cbc isa SSCF.Interpolation.ConstantBoundaryCondition
+        Test.@test cbc.value == -7.0
+
+        s = SSCF.Interpolation.build_spline(
+            SSCF.Interpolation.FastLinear1DInterpolation, xp, fp; bc = cbc, drop_collinear = Val(false),
+        )
+        Test.@test isapprox(s(2.5), 6.0; atol = 1e-12)      # in range: untouched by the bc
+        Test.@test s(-1.0) == -7.0                          # below
+        Test.@test s(9.0) == -7.0                           # above
+        # the out-of-range part of an integral is value * width, not zero
+        Test.@test isapprox(SSCF.Interpolation.safe_integrate(s, -2.0, -1.0; bc = cbc), -7.0; atol = 1e-12)
+        # a single node is out of range everywhere but at the node itself
+        one_node = SSCF.Interpolation.build_spline(
+            SSCF.Interpolation.FastLinear1DInterpolation, [0.0], [3.0]; bc = cbc, drop_collinear = Val(false),
+        )
+        Test.@test one_node(0.0) == 3.0
+        Test.@test one_node(5.0) == -7.0
+
+        # the value must not widen a narrower interpolant
+        s32 = SSCF.Interpolation.build_spline(
+            SSCF.Interpolation.FastLinear1DInterpolation, Float32.(xp), Float32.(fp);
+            bc = cbc, drop_collinear = Val(false),
+        )
+        Test.@test s32(2.5f0) isa Float32
+        Test.@test s32(-1.0f0) isa Float32
+    end
+
     Test.@testset "conservative_mass_matrix refuses a bc it cannot honor" begin
         xc = collect(1.0:1.0:6.0)
         # The end cells extend half a spacing past the outermost centres, so the basis functions are

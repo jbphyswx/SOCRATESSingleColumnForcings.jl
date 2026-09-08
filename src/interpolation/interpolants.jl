@@ -119,6 +119,11 @@ const FastLinear1DInterpolation = FastLinear1DInterpolationMethod()
 # Core scalar evaluation. `asc` is derived from the stored nodes so ascending and descending grids share
 # one code path; the interval search's cost follows `typeof(xp)` (range → O(1)). A single node is constant
 # (degenerate the eval formula so the return type stays stable across the N==1 / N>1 branches).
+# The value a `ConstantBoundaryCondition` returns outside the node range, in the element type the
+# in-range branches produce, so the return type does not depend on where `x` falls.
+@inline _const_value(bc::ConstantBoundaryCondition, xp, fp, x) =
+    convert(promote_type(eltype(fp), eltype(xp), typeof(x)), bc.value)
+
 @inline function _eval_linear(xp::AbstractVector, fp::AbstractVector, bc, x)
     N = length(xp)
     @inbounds x0n = xp[1]
@@ -126,6 +131,8 @@ const FastLinear1DInterpolation = FastLinear1DInterpolationMethod()
         y1 = convert(promote_type(eltype(fp), eltype(xp), typeof(x)), @inbounds fp[1]) # type sability
         if (bc isa NearestBoundaryCondition) || (bc isa ExtrapolateBoundaryCondition)
             return y1
+        elseif bc isa ConstantBoundaryCondition
+            return (x == x0n) ? y1 : _const_value(bc, xp, fp, x)
         else
             return (x == x0n) ? (y1) : throw(BoundsError(xp, x))
         end
@@ -140,6 +147,8 @@ const FastLinear1DInterpolation = FastLinear1DInterpolationMethod()
                 return @inbounds fp[1] + (fp[1] - fp[1]) * (x - x0n) / oneunit(x - x0n)
             elseif bc isa ExtrapolateBoundaryCondition
                 return @inbounds fp[1] + (fp[2] - fp[1]) * (x - xp[1]) / (xp[2] - xp[1])
+            elseif bc isa ConstantBoundaryCondition
+                return _const_value(bc, xp, fp, x)
             else
                 error("x = $x below interpolation range [$xmin, $xmax]")
             end
@@ -148,6 +157,8 @@ const FastLinear1DInterpolation = FastLinear1DInterpolationMethod()
                 return @inbounds fp[N] + (fp[N] - fp[N]) * (x - x0n) / oneunit(x - x0n)
             elseif bc isa ExtrapolateBoundaryCondition
                 return @inbounds fp[N - 1] + (fp[N] - fp[N - 1]) * (x - xp[N - 1]) / (xp[N] - xp[N - 1])
+            elseif bc isa ConstantBoundaryCondition
+                return _const_value(bc, xp, fp, x)
             else
                 error("x = $x above interpolation range [$xmin, $xmax]")
             end
@@ -158,6 +169,8 @@ const FastLinear1DInterpolation = FastLinear1DInterpolationMethod()
                 return @inbounds fp[1] + (fp[1] - fp[1]) * (x - x0n) / oneunit(x - x0n)
             elseif bc isa ExtrapolateBoundaryCondition
                 return @inbounds fp[1] + (fp[2] - fp[1]) * (x - xp[1]) / (xp[2] - xp[1])
+            elseif bc isa ConstantBoundaryCondition
+                return _const_value(bc, xp, fp, x)
             else
                 error("x = $x above interpolation range [$xmin, $xmax]")
             end
@@ -166,6 +179,8 @@ const FastLinear1DInterpolation = FastLinear1DInterpolationMethod()
                 return @inbounds fp[N] + (fp[N] - fp[N]) * (x - x0n) / oneunit(x - x0n)
             elseif bc isa ExtrapolateBoundaryCondition
                 return @inbounds fp[N - 1] + (fp[N] - fp[N - 1]) * (x - xp[N - 1]) / (xp[N] - xp[N - 1])
+            elseif bc isa ConstantBoundaryCondition
+                return _const_value(bc, xp, fp, x)
             else
                 error("x = $x below interpolation range [$xmin, $xmax]")
             end
@@ -853,6 +868,8 @@ function fast1d_safe_integrate(
                 y += fxbs[j] * (b - a)
             elseif bc isa ExtrapolateBoundaryCondition
                 y += fxbs[j] * (b - a) + (dfdxbs[j] / 2) * ((b - xbs[j])^2 - (a - xbs[j])^2)
+            elseif bc isa ConstantBoundaryCondition
+                y += FT(bc.value) * (b - a)
             end
         end
     end

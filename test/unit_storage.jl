@@ -99,4 +99,68 @@ Test.@testset "Storage backings" begin
         Test.@test itp(2.5) == 4.25
         Test.@test itp(9.0) == 4.25   # extrapolate bc: still the constant
     end
+
+    Test.@testset "Constant / ConstantVector built from an interpolant" begin
+        xs = collect(0.0:1.0:5.0)
+        flat = SSCF.Interpolation.build_spline(
+            SSCF.Interpolation.FastLinear1DInterpolation, xs, fill(4.25, length(xs));
+            bc = SSCF.Interpolation.ExtrapolateBoundaryCondition(), drop_collinear = Val(false),
+        )
+        Test.@test SSCF.Interpolation.Constant(flat).value == 4.25
+        Test.@test length(SSCF.Interpolation.ConstantVector(flat)) == length(xs)
+        Test.@test SSCF.Interpolation.ConstantVector(flat).value == 4.25
+
+        sloped = SSCF.Interpolation.build_spline(
+            SSCF.Interpolation.FastLinear1DInterpolation, xs, collect(1.0:1.0:6.0);
+            bc = SSCF.Interpolation.ExtrapolateBoundaryCondition(), drop_collinear = Val(false),
+        )
+        Test.@test_throws ErrorException SSCF.Interpolation.Constant(sloped)
+        Test.@test_throws ErrorException SSCF.Interpolation.ConstantVector(sloped)
+        # `Val(false)` is the caller asserting constancy; it takes the first value without checking
+        Test.@test SSCF.Interpolation.Constant(sloped, Val(false)).value == 1.0
+    end
+
+    Test.@testset "constantize_interpolant collapses an exactly-constant interpolant" begin
+        # Not used inside the package — it is offered to callers holding an interpolant they know is
+        # constant, so the storage collapses and evaluation skips the interval search.
+        xs = collect(0.0:1.0:5.0)
+        base = SSCF.Interpolation.build_spline(
+            SSCF.Interpolation.FastLinear1DInterpolation, xs, fill(4.25, length(xs));
+            bc = SSCF.Interpolation.ExtrapolateBoundaryCondition(), drop_collinear = Val(false),
+        )
+
+        # An out-of-range-tolerant bc needs no coordinate at all, so both sides collapse to length 1.
+        for bc in (
+            SSCF.Interpolation.ExtrapolateBoundaryCondition(),
+            SSCF.Interpolation.NearestBoundaryCondition(),
+        )
+            c = SSCF.Interpolation.constantize_interpolant(base, bc)
+            Test.@test c.xp isa SSCF.Interpolation.Constant
+            Test.@test c.fp isa SSCF.Interpolation.Constant
+            Test.@test c.bc === bc
+            Test.@test c(2.5) == 4.25
+            Test.@test c(9.0) == 4.25      # tolerant bc: constant everywhere
+            Test.@test c(-9.0) == 4.25
+        end
+
+        # An erroring bc still has to know the range, so the coordinate is kept and only the values
+        # collapse.
+        ce = SSCF.Interpolation.constantize_interpolant(base, SSCF.Interpolation.ErrorBoundaryCondition())
+        Test.@test ce.xp == xs
+        Test.@test ce.fp isa SSCF.Interpolation.ConstantVector
+        Test.@test length(ce.fp) == length(xs)
+        Test.@test ce(0.0) == 4.25
+        Test.@test ce(2.5) == 4.25
+        Test.@test ce(5.0) == 4.25
+        Test.@test_throws BoundsError ce(9.0)
+        Test.@test_throws BoundsError ce(-1.0)
+
+        # It defaults to the interpolant's own bc rather than silently changing the policy.
+        Test.@test SSCF.Interpolation.constantize_interpolant(base).bc === base.bc
+
+        # A constant bc would need a second value (inside vs outside); it is refused, not guessed.
+        Test.@test_throws ErrorException SSCF.Interpolation.constantize_interpolant(
+            base, SSCF.Interpolation.ConstantBoundaryCondition(-1.0),
+        )
+    end
 end

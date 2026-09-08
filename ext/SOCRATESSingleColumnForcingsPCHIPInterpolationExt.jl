@@ -74,6 +74,7 @@ end
 # pointwise counterpart of `_edge_integral` below.
 @inline _edge_value(::SSCF.Interpolation.ExtrapolateBoundaryCondition, y0, slope, x0, x) = y0 + (x - x0) * slope
 @inline _edge_value(::SSCF.Interpolation.NearestBoundaryCondition, y0, slope, x0, x) = y0
+@inline _edge_value(bc::SSCF.Interpolation.ConstantBoundaryCondition, y0, slope, x0, x) = oftype(y0, bc.value)
 @inline _edge_value(bc::SSCF.Interpolation.ErrorBoundaryCondition, y0, slope, x0, x) =
     error("requested x = $x lies outside the PCHIP knot range and bc = $bc")
 
@@ -160,6 +161,7 @@ end
 _edge_integral(::SSCF.Interpolation.NearestBoundaryCondition, y0, slope, x0, a, b) = y0 * (b - a)
 _edge_integral(::SSCF.Interpolation.ExtrapolateBoundaryCondition, y0, slope, x0, a, b) =
     y0 * (b - a) + slope / 2 * ((b - x0)^2 - (a - x0)^2)
+_edge_integral(bc::SSCF.Interpolation.ConstantBoundaryCondition, y0, slope, x0, a, b) = oftype(y0, bc.value) * (b - a)
 _edge_integral(bc::SSCF.Interpolation.ErrorBoundaryCondition, y0, slope, x0, a, b) =
     error("integration range [$a, $b] lies outside the knots and bc = $bc")
 

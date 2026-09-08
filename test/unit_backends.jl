@@ -58,6 +58,24 @@ Test.@testset "Interpolation backend conformance" begin
             Test.@test isapprox(spl(10.0), at(10.0); atol = 1e-8)
             Test.@test isfinite(spl(12.0))   # extrapolate bc: a value, not a throw
         end
+
+        Test.@testset "honors a constant bc, or refuses it for a stated reason" begin
+            # Dierckx's own `bc` has no general constant — only "zero" — so it must refuse a nonzero
+            # value outright rather than mis-set the boundary. Every other backend returns the value.
+            cbc = SSCF.Interpolation.ConstantBoundaryCondition(-7.0)
+            if startswith(label, "Dierckx")
+                Test.@test_throws ErrorException SSCF.Interpolation.build_spline(method, xp, fp; bc = cbc)
+                zspl = SSCF.Interpolation.build_spline(
+                    method, xp, fp; bc = SSCF.Interpolation.ConstantBoundaryCondition(0.0),
+                )
+                Test.@test isapprox(zspl(-1.0), 0.0; atol = 1e-8)
+            else
+                spl = SSCF.Interpolation.build_spline(method, xp, fp; bc = cbc)
+                Test.@test isapprox(spl(5.0), at(5.0); atol = 1e-8)   # in range: bc irrelevant
+                Test.@test isapprox(spl(-1.0), -7.0; atol = 1e-8)
+                Test.@test isapprox(spl(12.0), -7.0; atol = 1e-8)
+            end
+        end
     end
 end
 

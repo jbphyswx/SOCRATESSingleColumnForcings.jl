@@ -20,9 +20,11 @@ function SSCF.Interpolation.build_spline(
 )
     xp, fp = SSCF.Interpolation._maybe_prune(drop_collinear, xp, fp, collinear_tol)
     itp = Interpolations.interpolate((xp,), fp, method.degree)
+    # `extrapolate` also accepts a bare fill value, which is what a constant bc maps to.
     extrap =
         bc isa SSCF.Interpolation.ExtrapolateBoundaryCondition ? Interpolations.Line() :
-        bc isa SSCF.Interpolation.NearestBoundaryCondition ? Interpolations.Flat() : Interpolations.Throw()
+        bc isa SSCF.Interpolation.NearestBoundaryCondition ? Interpolations.Flat() :
+        bc isa SSCF.Interpolation.ConstantBoundaryCondition ? bc.value : Interpolations.Throw()
     return Interpolations.extrapolate(itp, extrap)
 end
 
