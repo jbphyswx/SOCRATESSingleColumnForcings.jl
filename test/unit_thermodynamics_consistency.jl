@@ -3,24 +3,15 @@ using SOCRATESSingleColumnForcings: SOCRATESSingleColumnForcings as SSCF
 using Thermodynamics: Thermodynamics as TD
 
 # ---------------------------------------------------------------------------
-# Cross-backend consistency: the `DefaultThermodynamicsBackend` and the extension backend agree to
-# loose, physically-justified tolerances over a realistic sounding. Tolerances reflect their different
-# formulations — the default backend's constant-L₀ Clausius–Clapeyron saturation is the loosest term
-# (~15%); density ~1%; potential and virtual temperatures well under 1%.
+# Cross-backend consistency: the default `DefaultThermodynamicsBackend` and the Thermodynamics.jl
+# backend (via the extension) must agree to physically-justified tolerances over a realistic sounding.
+# Tolerances reflect their different formulations — the default backend's constant-L₀
+# Clausius–Clapeyron saturation is the loosest term (~15%); density ~1%; potential and virtual
+# temperatures agree to well under 1%.
 # ---------------------------------------------------------------------------
 Test.@testset "Thermodynamics comparison: default vs Thermodynamics.jl extension backend" begin
     b = SSCF.DefaultThermodynamicsBackend()
 
-    # Dependency-free param_set for the Thermodynamics.jl (extension) backend, built from the default
-    # backend's constants. This test only checks that the extension is correctly linked — the thermodynamics methods
-    # dispatch into it and return sane values over the small set of calls below 
-    #
-    # `ThermodynamicsParameters`' field set differs across the supported (frozen) 0.11–0.15 range:
-    #   ≤0.13      : gas_constant / molmass_dryair / molmass_water / kappa_d   (no R_d/R_v/cp_d)
-    #   0.14–0.15.2: adds R_d/R_v/cp_d, drops kappa_d (still has gas_constant/molmass_*)
-    #   0.15.3+    : R_d/R_v/cp_d only
-    # So supply the union of fields (molar-mass forms derived so R_d/R_v/cp_d come out identical) and
-    # construct only the fields the resolved struct declares.
     R_d = SSCF.R_d(b); R_v = SSCF.R_v(b); cp_d = SSCF.cp_d(b)
     R_universal = 8.3144598  # [J/mol/K]; molmass_{dryair,water} = R_universal/R_{d,v} reproduce R_d, R_v
     param_vals = (;
@@ -30,11 +21,12 @@ Test.@testset "Thermodynamics comparison: default vs Thermodynamics.jl extension
         press_triple = 611.657, R_d = R_d, R_v = R_v, cp_d = cp_d, cp_v = SSCF.cp_v(b),
         cp_l = SSCF.cp_l(b), cp_i = SSCF.cp_i(b), LH_v0 = SSCF.L_v0(b), LH_s0 = SSCF.L_s0(b),
         entropy_dry_air = 6864.8, entropy_water_vapor = 10513.6, grav = SSCF.grav(b), pow_icenuc = 1.0,
+        q_min = eps(Float64),
         gas_constant = R_universal, molmass_dryair = R_universal / R_d,
         molmass_water = R_universal / R_v, kappa_d = R_d / cp_d,
     )
     fns = fieldnames(TD.Parameters.ThermodynamicsParameters)
-    thermo_params = TD.Parameters.ThermodynamicsParameters{Float64}(; (fn => getproperty(param_vals, fn) for fn in fns)...)
+    thermo_params = TD.Parameters.ThermodynamicsParameters{Float64}(; (fn => get(param_vals, fn, Float64(NaN)) for fn in fns)...) # retrieve NaN for things not specified to extend lifetime of this test relative to thermo_params fields
 
     # (T [K], p [Pa], q_tot [kg/kg]) across surface → upper troposphere
     pts = [(288.0, 1.0e5, 0.012), (280.0, 9.0e4, 0.008), (270.0, 7.0e4, 0.004),
@@ -46,14 +38,14 @@ Test.@testset "Thermodynamics comparison: default vs Thermodynamics.jl extension
             Test.@test isapprox(SSCF.virtual_temperature(b, T, p, q), SSCF.virtual_temperature(thermo_params, T, p, q); rtol = 5e-3)
             Test.@test isapprox(SSCF.air_density(b, T, p, q), SSCF.air_density(thermo_params, T, p, q); rtol = 3e-2)
             Test.@test isapprox(SSCF.liquid_ice_pottemp(b, T, p, q), SSCF.liquid_ice_pottemp(thermo_params, T, p, q); rtol = 1e-2)
-            Test.@test isapprox(SSCF.q_vap_saturation_liquid(b, T, p), SSCF.q_vap_saturation_liquid(thermo_params, T, p); rtol = 0.15)
+            Test.@test isapprox(SSCF.q_vap_saturation_liq(b, T, p), SSCF.q_vap_saturation_liq(thermo_params, T, p); rtol = 0.15)
         end
     end
 
     Test.@testset "surface humidities agree (~1%)" begin
         for (pg, Tg) in ((1.0e5, 288.0), (9.5e4, 280.0), (1.0e5, 292.0))
-            Test.@test isapprox(SSCF.saturation_q_tot_from_pgTg(b, pg, Tg), SSCF.saturation_q_tot_from_pgTg(thermo_params, pg, Tg); rtol = 3e-2)
-            Test.@test isapprox(SSCF.calc_qg_from_pgTg(b, pg, Tg), SSCF.calc_qg_from_pgTg(thermo_params, pg, Tg); rtol = 3e-2)
+            Test.@test isapprox(SSCF.saturation_mixing_ratio_from_pT(b, pg, Tg), SSCF.saturation_mixing_ratio_from_pT(thermo_params, pg, Tg); rtol = 3e-2)
+            Test.@test isapprox(SSCF.saturation_specific_humidity_from_pT(b, pg, Tg), SSCF.saturation_specific_humidity_from_pT(thermo_params, pg, Tg); rtol = 3e-2)
         end
     end
 

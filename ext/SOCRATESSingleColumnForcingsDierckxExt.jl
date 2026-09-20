@@ -7,14 +7,34 @@ struct DierckxSpline1DInterpolationMethod <: SSCF.Interpolation.AbstractInterpol
     k::Int
 end
 
+# Dierckx's own out-of-range vocabulary is "nearest" | "zero" | "extrapolate" | "error", so a constant
+# boundary value is expressible only when it is zero.
+_dierckx_bc(bc::SSCF.Interpolation.ValidBoundaryConditions) = SSCF.Interpolation.bc_string(bc)
+_dierckx_bc(bc::SSCF.Interpolation.ConstantBoundaryCondition) =
+    iszero(bc.value) ? "zero" :
+    error(
+        "Dierckx supports a constant boundary value only when it is zero (its `bc` accepts " *
+        "\"nearest\", \"zero\", \"extrapolate\", \"error\"); got $(bc.value). Use another backend, " *
+        "or wrap the returned spline.",
+    )
+
 function SSCF.Interpolation.build_spline(
     method::DierckxSpline1DInterpolationMethod,
     xp,
     fp;
     bc::BCT = SSCF.Interpolation.ErrorBoundaryCondition(),
+    drop_collinear::Val = Val(false),
+    collinear_tol = promote_type(eltype(xp), eltype(fp))(NaN)
 ) where {BCT <: SSCF.Interpolation.ValidBoundaryConditions}
-    return Dierckx.Spline1D(xp, fp; k = method.k, bc = SSCF.Interpolation.bc_string(bc))
+    xp, fp = SSCF.Interpolation._maybe_prune(drop_collinear, xp, fp, collinear_tol)
+    k = min(method.k, length(xp) - 1) # Dierckx requires k < length(x), and pruning can leave fewer nodes than k
+    return Dierckx.Spline1D(xp, fp; k = k, bc = _dierckx_bc(bc))
 end
+
+SSCF.Interpolation.interpolant_nodes(spl::Dierckx.Spline1D) = Dierckx.get_knots(spl)
+
+SSCF.Interpolation.rebuild_interpolant(spl::Dierckx.Spline1D, xs, ys) =
+    Dierckx.Spline1D(xs, ys; k = spl.k, bc = Dierckx._translate_bc(spl.bc))
 
 function SSCF.Interpolation.interpolate_1d(
     x,
@@ -131,6 +151,8 @@ function dierckx_safe_integrate(
             elseif (bc isa SSCF.Interpolation.ExtrapolateBoundaryCondition)
                 # linear expansion f(x) ≈ f(xb) + f'(xb)(x - xb) integrated over (a, b)
                 y += (fxbs[j] * (b - a) + (dfdxbs[j] / 2) * ((b - xbs[j])^2 - (a - xbs[j])^2))
+            elseif (bc isa SSCF.Interpolation.ConstantBoundaryCondition)
+                y += FT(bc.value) * (b - a)
             end
         end
     end

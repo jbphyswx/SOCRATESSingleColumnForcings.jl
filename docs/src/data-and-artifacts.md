@@ -11,11 +11,11 @@ For raw retrieval into a directory of your choice (e.g. to inspect or mirror the
 ```julia
 using SOCRATESSingleColumnForcings: SOCRATESSingleColumnForcings as SSCF
 
-SSCF.download_atlas_les_inputs("/path/to/dir"; flight_numbers = [1, 9], forcing_types = (:Obs_data, :ERA5_data))
+SSCF.download_atlas_les_inputs("/path/to/dir"; flight_numbers = [1, 9], forcing_types = (SSCF.ObsForcing(), SSCF.ERA5Forcing()))
 SSCF.download_atlas_les_outputs("/path/to/dir"; flight_numbers = [1, 9])
 ```
 
-Implementation: `Data/Atlas_LES_Profiles/download_atlas_les_profiles.jl` (included from the main module).
+Implementation: `src/raw_data_sources.jl`. Runtime artifact resolution is in `src/artifacts.jl`.
 
 ## Artifact registry
 
@@ -93,9 +93,9 @@ Keyword `open_files = false` returns file paths instead of opened datasets (usef
 - **SOCRATES campaign:** Pfister et al. (2022), [doi:10.1029/2019JD031915](https://doi.org/10.1029/2019JD031915)
 - **Atlas LES setup & files:** Atlas (2020), [doi:10.1029/2020MS002205](https://doi.org/10.1029/2020MS002205)
 - **Upstream hosting:** [UW Atlas SOCRATES LES cases](https://atmos.uw.edu/~ratlas/SOCRATES-LES-cases.html)
-- **Download mirrors:** Caltech Box links in `download_atlas_les_profiles.jl` (`SOCRATES_LES_inputs_Box_links`, `SOCRATES_LES_outputs_Box_links`)
+- **Download mirrors:** Caltech Box links in `src/raw_data_sources.jl` (`SOCRATES_LES_inputs_Box_links`, `SOCRATES_LES_outputs_Box_links`)
 
-Original Rachel Atlas scripts referenced in the upstream README are under `Data/Atlas_LES_Profiles/` (not required for artifact-backed workflow).
+Original Rachel Atlas scripts referenced in the upstream README are under `Rachel_Atlas_Scripts/` (not required for artifact-backed workflow).
 
 ## NetCDF read conventions
 
@@ -121,7 +121,7 @@ See `test/unit_ncdatasets.jl` and `test/unit_shape_contracts.jl` for contracts.
 
 If artifacts cannot be downloaded (firewall, HPC without outbound HTTP):
 
-1. Download files manually from the Box links in `download_atlas_les_profiles.jl`.
+1. Download files manually from the Box links in `src/raw_data_sources.jl`.
 2. Place them in the artifact directory layout above.
 3. Or bind a local tree with `Artifacts.bind_artifact!` (advanced; see Julia artifact docs).
 

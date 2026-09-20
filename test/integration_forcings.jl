@@ -42,14 +42,16 @@ Test.@testset "SOCRATESSingleColumnForcings integration" begin
             files_present(fl, ft) || continue
             cik = SSCF.Interpolation.get_conservative_interp_kwargs(;)
             cons && (cik = SSCF.set_property(cik, :enforce_positivity, pos))
+            z_regrid_opts = SSCF.RegriddingOpts(;
+                conservative = cons ? SSCF.ConservativeRegridingOpts(; kwargs = cik) : nothing,
+            )
             out = SSCF.get_column_forcing(
                 fl, ft, atlas_vars, Tuple{StepRangeLen, Nothing}, Tuple{Vector, Float32};
                 new_z = new_z,
                 initial_condition = ic,
                 thermodynamics_backend = tp,
                 use_LES_output_for_z = false,
-                conservative_interp = cons,
-                conservative_interp_kwargs = cik,
+                z_regrid_opts = z_regrid_opts,
                 fail_on_missing_data = false,
             )
             Test.@test out isa NamedTuple

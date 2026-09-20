@@ -10,8 +10,7 @@ function _open_atlas_les_input(flight_number::Integer, forcing_type::AbstractFor
     data = isfile(data_filename) ? (open_files ? NC.Dataset(data_filename, "r") : data_filename) : error("Missing input file $data_filename")
     include_grid || return (; data)
 
-    grid_filename = atlas_grid_file(flight_number)   # shared metadata artifact, selected via grid_heights
-    grid_data = isfile(grid_filename) ? (open_files ? vec(DelimitedFiles.readdlm(grid_filename, Float64)) : grid_filename) : error("Missing grid file $grid_filename")
+    grid_data = _load_grid(flight_number, Val(open_files))
     return (; data, grid_data)
 end
 
@@ -30,8 +29,7 @@ function _open_atlas_les_input(flight_number::Integer, open_files_val::Val{open_
     Obs_data = _open_atlas_les_input(flight_number, ObsForcing(), open_files_val, Val(false)).data
     ERA5_data = _open_atlas_les_input(flight_number, ERA5Forcing(), open_files_val, Val(false)).data
     include_grid || return (; Obs_data, ERA5_data)
-    grid_filename = atlas_grid_file(flight_number)   # shared metadata artifact
-    grid_data = isfile(grid_filename) ? (open_files ? vec(DelimitedFiles.readdlm(grid_filename, Float64)) : grid_filename) : error("Missing grid file $grid_filename")
+    grid_data = _load_grid(flight_number, Val(open_files))
     return (; Obs_data, ERA5_data, grid_data)
 end
 
@@ -45,15 +43,14 @@ function open_atlas_les_input(flight_number::Integer; open_files::Bool = true, i
 end
 
 function _open_atlas_les_grid(flight_number::Integer, ::Val{open_files}) where {open_files}
-    grid_filename = atlas_grid_file(flight_number)   # shared metadata artifact, selected via grid_heights
-    grid_data = isfile(grid_filename) ? (open_files ? vec(DelimitedFiles.readdlm(grid_filename, Float64)) : grid_filename) : error("Missing grid file $grid_filename")
+    grid_data = _load_grid(flight_number, Val(open_files))
     return (; grid_data)
 end
 
 """
     open_atlas_les_grid(flight_number; open_files=true)
 
-Return `(; grid_data)`, the vertical grid vector for `flight_number` (from the obs input artifact).
+Return `(; grid_data)`, the vertical grid vector for `flight_number` (from the shared metadata artifact).
 """
 function open_atlas_les_grid(flight_number::Integer; open_files::Bool = true)
     return _open_atlas_les_grid(flight_number, Val(open_files))

@@ -12,6 +12,5 @@ Upstream data hosting: [UW Atlas SOCRATES LES cases](https://atmos.uw.edu/~ratla
 
 ## Related CliMA packages
 
-- [TurbulenceConvection.jl](https://github.com/CliMA/TurbulenceConvection.jl) — EDMF single-column model (primary downstream consumer)
-- [Thermodynamics.jl](https://github.com/CliMA/Thermodynamics.jl) — accurate saturation adjustment and θ\_liq\_ice (optional extension)
+- [Thermodynamics.jl](https://github.com/CliMA/Thermodynamics.jl) — saturation adjustment and θ\_liq\_ice (optional extension)
 - [CalibrateEDMF.jl](https://github.com/CliMA/CalibrateEDMF.jl) — calibration workflows using SOCRATES cases

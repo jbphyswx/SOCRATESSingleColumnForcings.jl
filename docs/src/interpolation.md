@@ -70,7 +70,7 @@ r = SSCF.Interpolation.UniformRange(0.0f0, 300.0f0, 33)
 
 - Coercion requires **exact** uniform spacing (no tolerance by default).
 - `_eval_linear(::UniformRange, …)` uses multiply + `inv_step` instead of `searchsortedlast`.
-- Benchmarks on this codebase: ~4 ns eval with `SVector` values + `drop_collinear=Val(true)` vs ~8 ns for default `StepRangeLen` + full `Vector`.
+- `SVector` values with `drop_collinear = Val(true)` evaluate faster than the default `StepRangeLen` + full `Vector`, since the lookup is arithmetic and the nodes are isbits.
 
 Use when the time axis is nominally uniform and exactly representable (or reconstructed to exact steps upstream).
 
@@ -118,11 +118,11 @@ Pass `drop_collinear = Val(true)` to `get_column_forcing` to prune built time sp
 In `conservative.jl`:
 
 - `conservative_regridder` — mass-conserving vertical remap
-- `get_conservative_A` — build/cache mass matrix
-- `default_conservative_interp_kwargs` — enhancement factors, positivity flag
+- `conservative_mass_matrix` — build the mass matrix (the caller caches it via `MassMatrixCache`)
+- `default_conservative_interp_kwargs` — solver options carried by `ConservativeRegridingOpts`
 - `nnls_solve` — stub in core; implemented in `NonNegLeastSquares` extension
 
-Conservative regridding is opt-in via `conservative_interp = true` in `get_column_forcing`. Density (`ρ`) is the default interpolation weight for column fields.
+Conservative regridding is opt-in by passing a `ConservativeRegridingOpts` as `z_regrid_opts.conservative` in `get_column_forcing`. Density (`ρ`) is the default interpolation weight for column fields.
 
 ## Building and evaluating manually
 
@@ -146,7 +146,7 @@ SSCF.Interpolation.interpolate_1d(query_times, xp, fp, SSCF.Interpolation.FastLi
 | `SVector` values (small N) | Isbits, fixed-size gather at eval |
 | `drop_collinear = Val(true)` | Shorter node sets for flat/near-flat fields |
 | `Constant` / `ConstantVector` fp | Constant-field eval fast path |
-| `conservative_interp = false` | Skip mass-matrix setup (default) |
+| `z_regrid_opts.conservative = nothing` | Skip mass-matrix setup (default) |
 
 Type stability: pass concrete type specs (`Tuple{UniformRange, Float32}`, not `Tuple{Any, Float32}`) so `get_column_forcing` returns a fully concrete `NamedTuple`.
 

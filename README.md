@@ -8,7 +8,7 @@
 [zenodo-img]: https://zenodo.org/badge/585317234.svg
 [zenodo-latest-url]: https://doi.org/10.5281/zenodo.14945665
 
-Julia package for building **single-column forcings** from the [SOCRATES](https://doi.org/10.1029/2019JD031915) field campaign, using the LES input/output datasets published by [Atlas (2020)](https://doi.org/10.1029/2020MS002205). The primary consumer is the CliMA EDMF single-column model ([TurbulenceConvection.jl](https://github.com/CliMA/TurbulenceConvection.jl)), but the package is usable on its own for reading Atlas data, regridding profiles, and building allocation-free time interpolants.
+Julia package for building **single-column forcings** from the [SOCRATES](https://doi.org/10.1029/2019JD031915) field campaign, using the LES input/output datasets published by [Atlas (2020)](https://doi.org/10.1029/2020MS002205). It reads Atlas data, regrids profiles, and builds allocation-free time interpolants for driving single-column models.
 
 ## What it does
 
@@ -26,14 +26,12 @@ The return type is a **concretely typed `NamedTuple`**: each requested field is 
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/jbphyswx/SOCRATESSingleColumnForcings.jl")
-# or, for local development:
-# Pkg.develop(path="/path/to/SOCRATESSingleColumnForcings.jl")
+] add SOCRATESSingleColumnForcings
 ```
 
 **Requirements:** Julia ≥ 1.10. Core deps: `NCDatasets`, `StaticArrays`, stdlibs.
 
-**Recommended optional deps** (loaded as [package extensions](https://pkgdocs.julialang.org/v1/creating-packages/#Conditional-loading-of-code-in-packages-(Extensions))):
+**Optional deps** (loaded as [package extensions](https://pkgdocs.julialang.org/v1/creating-packages/#Conditional-loading-of-code-in-packages-(Extensions))):
 
 | Extension | Weakdep | Purpose |
 |-----------|---------|---------|
@@ -51,8 +49,8 @@ Load an extension by `using` its weak dependency in the same session, e.g. `usin
 using SOCRATESSingleColumnForcings: SOCRATESSingleColumnForcings as SSCF
 
 # 1. Download data (once per flight; stored as Julia artifacts)
-SSCF.download_atlas_les_inputs(flight_numbers = [9])
-SSCF.download_atlas_les_outputs(flight_numbers = [9])
+SSCF.download_atlas_les_inputs("/path/to/dir"; flight_numbers = [9])
+SSCF.download_atlas_les_outputs("/path/to/dir"; flight_numbers = [9])
 
 # 2. Build column forcing on the default Atlas vertical grid
 using Thermodynamics: Thermodynamics as TD
@@ -87,7 +85,8 @@ Regrid onto a custom vertical grid:
 ```julia
 new_z = collect(0.0:100.0:4000.0)
 forcing = SSCF.get_column_forcing(
-    9, SSCF.ObsForcing(), new_z;
+    9, SSCF.ObsForcing();
+    new_z = new_z,
     thermodynamics_backend = tp,
 )
 ```
@@ -112,7 +111,7 @@ forcing = SSCF.get_column_forcing(
 
 **Flights:** `flight_numbers = (1, 9, 10, 11, 12, 13)`. RF11 is ERA5-only; RF12/RF13 use 192-level grids; others use 320 levels.
 
-See [docs/forcings.md](docs/src/forcings.md) for the full `get_column_forcing` API, or the [Documenter site](https://jbphyswx.github.io/SOCRATESSingleColumnForcings.jl/dev/forcings/).
+See [docs/forcings.md](docs/src/forcings.md) for the full `get_column_forcing` API, or the [documentation website](https://jbphyswx.github.io/SOCRATESSingleColumnForcings.jl/dev/forcings/).
 
 ## Fast interpolation storage
 
@@ -122,7 +121,7 @@ Built time interpolants store their node/value arrays in caller-selected backing
 # Default: StepRangeLen time axis + Vector{Float64} values
 SSCF.get_column_forcing(9, SSCF.ObsForcing(); thermodynamics_backend = tp)
 
-# Fast uniform time axis + Float32 values (recommended for production)
+# Fast uniform time axis + Float32 values
 SSCF.get_column_forcing(
     9, SSCF.ObsForcing(),
     SSCF.supported_forcing_variables,
@@ -136,7 +135,7 @@ SSCF.get_column_forcing(
 | Storage type | Role | When to use |
 |--------------|------|-------------|
 | `StepRangeLen` | Uniform time axis (stdlib range) | Default; O(1) interval search |
-| `UniformRange` | Custom uniform range with precomputed `inv_step` | ~4 ns eval; avoids `StepRangeLen` twiceprecision |
+| `UniformRange` | Custom uniform range with precomputed `inv_step` | O(1) eval; avoids `StepRangeLen` twiceprecision |
 | `Vector` / `SVector` | Irregular or small fixed node sets | General backing; `SVector` for isbits hot paths |
 | `Constant` / `ConstantVector` | Exactly-constant fields after collinear pruning | Constant-field fast path |
 
@@ -151,7 +150,7 @@ SSCF.get_surface_reference_state(9, SSCF.ObsForcing(); thermodynamics_backend = 
 # Time-dependent surface conditions as built interpolants
 SSCF.get_surface_forcing(9, SSCF.ObsForcing(); thermodynamics_backend = tp)
 
-# LES reference pressure/density profiles for TurbulenceConvection setup
+# LES reference pressure/density profiles
 SSCF.les_reference_profiles(9; forcing_type = SSCF.ObsForcing())
 
 # Low-level I/O
@@ -162,7 +161,7 @@ SSCF.open_atlas_les_grid(9)
 
 ## Data and artifacts
 
-Forcing and LES files are too large for the repository. They are fetched via `download_atlas_les_inputs` / `download_atlas_les_outputs` and registered as [Julia artifacts](https://pkgdocs.julialang.org/v1/artifacts/) (`Artifacts.toml`). Raw download URLs and Rachel Atlas's original scripts live under `Data/Atlas_LES_Profiles/`.
+Forcing and LES files are distributed as lazy [Julia artifacts](https://pkgdocs.julialang.org/v1/artifacts/) (`Artifacts.toml`), downloaded and cached on first use — `src/artifacts.jl` resolves them, and no manual step is needed. `download_atlas_les_inputs` / `download_atlas_les_outputs` in `src/raw_data_sources.jl` fetch the raw upstream files to rebuild those artifacts. Rachel Atlas's original scripts are under `Rachel_Atlas_Scripts/`.
 
 See [docs/data-and-artifacts.md](docs/src/data-and-artifacts.md) or the [Documenter guide](https://jbphyswx.github.io/SOCRATESSingleColumnForcings.jl/dev/data-and-artifacts/).
 
@@ -219,9 +218,11 @@ src/
   interpolation/                    # self-contained Interpolation submodule
   open_atlas_les_inputs.jl          # Atlas input I/O
   open_atlas_les_outputs.jl         # Atlas LES output I/O
-  les_reference_profiles.jl         # p/ρ reference profiles for TC.jl
+  les_reference_profiles.jl         # p/ρ reference profiles
+  artifacts.jl                      # runtime artifact resolution (every read goes through here)
+  raw_data_sources.jl               # upstream Box/UW links + artifact-regeneration helpers
 ext/                                # optional-backend extensions
-Data/Atlas_LES_Profiles/            # download script + upstream links
+Data/Atlas_LES_Profiles/            # local copies of the Atlas data
 test/                               # unit + integration tests
 ```
 

@@ -13,7 +13,7 @@ data : is a container from which the data can be accessed as a string in data[va
 
 reshape_ground : expand the ground data to the same size as bottom slice of the air data (so you can pass in for example a single scalar or similar reduced dimension varg)
 assume_monotonic : assume that the ground value is actually below everything in the array... in reality sometimes we have for example a ground pressure above that of the minimum in this array... (should be faster than using insert_location )
-# might not need this anymore cause if insert_location is integer that jut works
+may be unnecessary now: an integer insert_location already works directly
 
 # atlas stated "We use hourly pressure level data interpolated onto a horizontal grid of 0.25° × 0.25° and 37 pressure levels from its native 137 hybrid sigma/pressure levels and 30 km horizontal grid." so i guess sometimes this causes slight problems
 """
@@ -48,11 +48,11 @@ function combine_air_and_ground_data(
                 dimnames = NC.dimnames(data["T"])
                 vardatag = permutedims(vardatag, [findfirst(x -> x == dim, dimnames) for dim in dimnamesg])
             end
-        elseif isa(vardatag, AbstractArray) # an unlabeled array, i think we can't guarantee then that the lev axis exists at all or what existing dimensions are so this just assumes everything is correct except the lev dimension being there
+        elseif isa(vardatag, AbstractArray) # an unlabeled array: the lev axis and existing dimensions can't be guaranteed, so assume everything is correct except that the lev dimension must be added
             # assume we need to add a new dimension at the same location as in the full array and order otherwise is preserved (quick check looks ok)
             sz_vardatag = collect(size(vardatag)) # array
             if ndims(vardatag) == (ndims(vardata) - 1)
-                ## TODO USE add_dim
+                # TODO: use add_dim here
                 insert!(sz_vardatag, concat_dim, 1) # insert sz 1 at this location
                 vardatag = reshape(vardatag, sz_vardatag...) # reshape (just adds the singleton dimension in)
             elseif ndims(vardatag) != ndims(vardata)
@@ -98,7 +98,7 @@ function combine_air_and_ground_data(
     vardatag = repeat(vardatag, num_repeatg...)
     vardata = repeat(vardata, num_repeat...)
 
-    if insert_location == :end # here we assume the ground values are below the values we add automatically. (we used to use identity fcn but i think we don't need that)
+    if insert_location == :end # assume the ground values are below the values we add automatically
         vardata = cat(vardata, vardatag; dims = concat_dim) # we concatenate it at the end...
     elseif isa(insert_location, Function) # use function to determine where to insert our ground values, uses search sorted assuming the original array is already sorted (speedup from binary search)
         mapslice_func = function (vect; by = insert_location) # write this way cause can't define func inside conditional unless anonymous?, see https://github.com/JuliaLang/julia/issues/15602 , https://stackoverflow.com/a/65660721
@@ -117,7 +117,7 @@ function combine_air_and_ground_data(
                 selectdim(vardata, concat_dim, insert_location:size(vardata, concat_dim));
                 dims = concat_dim,
             ) # insert the slice there...
-        elseif isa(vardatag, AbstractArray) # an unlabeled array, i think we can't guarantee then that the lev axis exists at all or what existing dimensions are so this just assumes everything is correct except the lev dimension being there
+        elseif isa(vardatag, AbstractArray) # an unlabeled array: the lev axis and existing dimensions can't be guaranteed, so assume everything is correct except that the lev dimension must be added
             # assume we need to add a new dimension at the same location as in the full array and order otherwise is preserved (quick check looks ok)
             insert_location_arr = insert_location
             if ndims(insert_location_arr) == (ndims(vardata) - 1)
@@ -163,16 +163,32 @@ function combine_air_and_ground_data(
             vardatag = repeat(vardatag, repeat_ground...)
             insert_location_arr = repeat(insert_location_arr, repeat_insert...)
 
-            mapslice_func = function (vect) # write this way cause can't define func inside conditional unless anonymous?, see https://github.com/JuliaLang/julia/issues/15602 , https://stackoverflow.com/a/65660721
-                T = promote_type(typeof(vect[1]), typeof(vect[end - 1]))
-                vardata = T.(collect(vect[1:(end - 2)]))
-                vardatag = T(vect[end - 1])
-                insert_location = Int(vect[end]) # undo if was coerced to FT
-                # insert (a little more complicated now cause we aren't exactly getting the same size output... dont think that actually matters for mapslices...)
-                return insert!(vardata, insert_location, vardatag)
+            # Write each column straight into a preallocated output: the ground value at its own
+            # insertion index, the air values either side. Avoids catting the three arrays together
+            # and, per column, a slice copy plus an `insert!` that grows the vector.
+            T = promote_type(eltype(vardata), eltype(vardatag))
+            n_air = size(vardata, concat_dim)
+            out_sz = collect(size(vardata))
+            out_sz[concat_dim] = n_air + 1
+            out = Array{T}(undef, out_sz...)
+
+            column_dims = Tuple(d for d in 1:ndims(vardata) if d != concat_dim)
+            for (dst, air, ground, loc) in zip(
+                eachslice(out; dims = column_dims),
+                eachslice(vardata; dims = column_dims),
+                eachslice(vardatag; dims = column_dims),
+                eachslice(insert_location_arr; dims = column_dims),
+            )
+                k = Int(only(loc)) # undo if was coerced to FT
+                (1 ≤ k ≤ n_air + 1) ||
+                    error("insert_location $(k) is outside 1:$(n_air + 1) for a column of $(n_air) air values")
+                @inbounds begin
+                    copyto!(view(dst, 1:(k - 1)), view(air, 1:(k - 1)))
+                    dst[k] = T(only(ground))
+                    copyto!(view(dst, (k + 1):(n_air + 1)), view(air, k:n_air))
+                end
             end
-            vardata = cat(vardata, vardatag, insert_location_arr; dims = concat_dim)
-            vardata = mapslices(mapslice_func, vardata; dims = (concat_dim,))
+            vardata = out
         end
     else
         error("unsupported input type for variable insert_location") # catch what would otherwise silently fail and return vardata

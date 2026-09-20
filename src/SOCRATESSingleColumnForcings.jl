@@ -7,7 +7,7 @@ primitives live in the nested [`Interpolation`](@ref) submodule (qualified calls
 """
 module SOCRATESSingleColumnForcings
 
-using NCDatasets: NCDatasets as NC  
+using NCDatasets: NCDatasets as NC
 using NCDatasets: NCDatasets
 using Artifacts: Artifacts
 using Pkg: Pkg
@@ -23,6 +23,7 @@ using StaticArrays: StaticArrays
 const package_root = dirname(@__DIR__)
 const artifacts_toml = joinpath(package_root, "Artifacts.toml")
 
+include("atlas_diagnostics.jl")
 include("thermodynamics.jl")
 
 resolve_nan(x::FT, val::FT = zero(FT)) where {FT} = isnan(x) ? FT(val) : x # replace nan w/ 0
@@ -31,8 +32,6 @@ function resolve_nan!(x::AbstractArray{FT}, val::FT = FT(0.0)) where {FT}
         x[i] = resolve_nan(x[i], val)
     end
 end
-# resolve_inf(x::FT; val::FT=FT(NaN)) where {FT} = isinf(x) ? val : x # replace inf with NaN
-# resolve_not_finite(x::FT, val = FT(0.0)) where {FT} = !isfinite(x) ? FT(val) : x # replace inf and nan with 0
 
 # --- forcing source -------------------------------------------------------------------------- #
 """
@@ -78,7 +77,7 @@ forcing_key(::ERA5Forcing) = :ERA5_data
 
 # Two cases with shallow cloud-topped boundary layers, RF12 and RF13, are run on a 192-level vertical grid.
 # The other four cases have clouds extending through deeper boundary layers; they are run on a 320-level vertical grid.
-const grid_heights = Base.ImmutableDict(1 => 320, 9 => 320, 10 => 320, 11 => 320, 12 => 192, 13 => 192) # this might be slow idk..
+const grid_heights = Base.ImmutableDict(1 => 320, 9 => 320, 10 => 320, 11 => 320, 12 => 192, 13 => 192)
 
 """
     grid_height(flight_number)
@@ -107,15 +106,17 @@ end
 # source reaches the API through qualified calls (`Interpolation.foo`).
 include("interpolation/Interpolation.jl")
 
-include("../Data/Atlas_LES_Profiles/download_atlas_les_profiles.jl") # in Data/, not src/ (static path so the module stays statically analyzable)
+include("artifacts.jl")
 include("metadata.jl")
 include("open_atlas_les_inputs.jl")
 include("open_atlas_les_outputs.jl")
+include("raw_data_sources.jl")
 include("array_utils.jl")
 include("netcdf_fields.jl")
 include("ground_insertion.jl")
 include("field_altitude.jl")
 include("regrid.jl")
+include("units.jl") # after regrid.jl: the specs dispatch on AbstractRegridSource
 include("forcings.jl")
 include("les_reference_profiles.jl")
 
