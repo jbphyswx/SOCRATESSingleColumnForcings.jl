@@ -2,8 +2,6 @@ module SOCRATESSingleColumnForcingsThermodynamicsExt
 
 # Thermodynamics.jl backend. The SSCF thermodynamics methods defined here dispatch on
 # `ThermodynamicsParameters`, so the parameter set itself serves as the `thermodynamics_backend`:
-# plain scalar-field calls into Thermodynamics.jl, no state object. The built-in default backend
-# `DefaultThermodynamicsBackend` lives in the core.
 
 using SOCRATESSingleColumnForcings: SOCRATESSingleColumnForcings as SSCF
 using Thermodynamics: Thermodynamics as TD
@@ -36,10 +34,11 @@ using Thermodynamics: Thermodynamics as TD
 
 
 # --- equilibrium condensate partition from (T, p, q_tot) ---
-function SSCF.equilibrium_condensate(thermo_params::TD.Parameters.ThermodynamicsParameters, T, p, q_tot)
+function SSCF.equilibrium_condensate(thermo_params::TD.Parameters.ThermodynamicsParameters, T, p, q_tot; λ = SSCF.liquid_fraction(thermo_params, T))
     ρ = TD.air_density(thermo_params, T, p, q_tot)
-    (q_liq, q_ice) = TD.condensate_partition(thermo_params, T, ρ, q_tot)  # (q_liq, q_ice)
-    return (; q_liq, q_ice)
+    p_vap_sat = TD.saturation_vapor_pressure_mixture(thermo_params, T, λ)
+    q_c = TD.saturation_excess(thermo_params, T, ρ, q_tot, p_vap_sat)
+    return (; q_liq = λ * q_c, q_ice = (one(λ) - λ) * q_c)
 end
 
 # ------------------------------------------------------------ #
@@ -88,7 +87,7 @@ SSCF.dry_pottemp(thermo_params::TD.Parameters.ThermodynamicsParameters, T, p) = 
 @inline SSCF.saturation_vapor_pressure_liq(thermo_params::TD.Parameters.ThermodynamicsParameters, T) = SSCF.saturation_vapor_pressure(thermo_params, T, SSCF.Liquid())
 @inline SSCF.saturation_vapor_pressure_ice(thermo_params::TD.Parameters.ThermodynamicsParameters, T) = SSCF.saturation_vapor_pressure(thermo_params, T, SSCF.Ice())
 
-@inline SSCF.liquid_fraction(thermo_params::TD.Parameters.ThermodynamicsParameters, T) = TD.liquid_fraction(thermo_params, T, zero(T), zero(T))
+@inline SSCF.liquid_fraction(thermo_params::TD.Parameters.ThermodynamicsParameters, T) = TD.liquid_fraction_ramp(thermo_params, T)
 
 @inline SSCF.q_vap_saturation_from_pressure(thermo_params::TD.Parameters.ThermodynamicsParameters, q_tot, p, T) = TD.q_vap_saturation_from_pressure(thermo_params, q_tot, p, T)
 
@@ -122,6 +121,47 @@ end
         p,
         p_v_sat,
     )
+end
+
+"""
+    _θ_li_derivative_state(param_set, T, p, q_tot, vars)
+
+Quantities needed to differentiate `θ_li` with respect to `T` at fixed pressure, given the
+condensate humidities and their temperature derivatives in `vars`.
+"""
+@inline function _θ_li_derivative_state(
+    param_set::TD.Parameters.ThermodynamicsParameters,
+    T,
+    p,
+    q_tot,
+    vars,
+)
+    R_v = TD.Parameters.R_v(param_set)
+    cp_v = TD.Parameters.cp_v(param_set)
+    cp_l = TD.Parameters.cp_l(param_set)
+    cp_i = TD.Parameters.cp_i(param_set)
+    LH_v0 = TD.Parameters.LH_v0(param_set)
+    LH_s0 = TD.Parameters.LH_s0(param_set)
+    p0 = TD.Parameters.p_ref_theta(param_set)
+
+    R_m = TD.gas_constant_air(param_set, q_tot, vars.q_liq, vars.q_ice)
+    cp_m = TD.cp_m(param_set, q_tot, vars.q_liq, vars.q_ice)
+    α = R_m / cp_m
+
+    ln_p_over_p0 = log(p / p0)
+    θ = T / exp(α * ln_p_over_p0)  # Π = (p/p₀)^α
+
+    L_c = LH_v0 * vars.q_liq + LH_s0 * vars.q_ice
+    F = 1 - L_c / (cp_m * T)
+
+    ∂R_m_∂T = R_v * vars.∂qvs_∂T
+    ∂cp_m_∂T = (cp_l - cp_v) * vars.∂q_liq_∂T + (cp_i - cp_v) * vars.∂q_ice_∂T
+    ∂α_∂T = (∂R_m_∂T * cp_m - R_m * ∂cp_m_∂T) / cp_m^2
+
+    ∂L_c_∂T = LH_v0 * vars.∂q_liq_∂T + LH_s0 * vars.∂q_ice_∂T
+    ∂F_∂T = -1 / (cp_m * T) * (∂L_c_∂T - L_c * (1 / T + ∂cp_m_∂T / cp_m))
+
+    return (; θ, F, ln_p_over_p0, ∂α_∂T, ∂F_∂T)
 end
 
 @inline function _fixed_λ_θ_li_and_derivative(
@@ -184,13 +224,7 @@ end
         ∂q_ice_∂T,
     )
 
-    st = TD._θ_li_derivative_state(
-        param_set,
-        T,
-        p,
-        q_tot,
-        vars,
-    )
+    st = _θ_li_derivative_state(param_set, T, p, q_tot, vars)
 
     θ_li_val = TD.liquid_ice_pottemp_given_pressure(
         param_set,
@@ -231,10 +265,11 @@ function saturation_adjustment_given_liquid_fraction(::Type{TD.RS.NewtonsMethod}
         return (; T = T_unsat, q_liq = zero(q_tot), q_ice = zero(q_tot), converged = true)
     end
 
-    T_guess = max(T_unsat, TD.T_positive_floor(FT))
+    T_floor = sqrt(eps(FT))
+    T_guess = max(T_unsat, T_floor)
 
     roots_function = T -> begin
-        T_val = max(T, TD.T_positive_floor(FT))
+        T_val = max(T, T_floor)
         θ_li_val, ∂θ_li_∂T, _, _ = _fixed_λ_θ_li_and_derivative(param_set, T_val, p, q_tot, λ)
         (θ_li_val - θ_li, ∂θ_li_∂T)
     end
@@ -295,15 +330,6 @@ function SSCF.saturation_mixing_ratio_from_pT(thermo_params::TD.Parameters.Therm
     pv = TD.saturation_vapor_pressure(thermo_params, T, phase)
     ε = SSCF.molmass_ratio(thermo_params)  # M_v/M_d ≈ 0.622 (see the accessor above; NOT TD's inverse)
     return ε * pv / (p - pv)  # saturation total-water mixing ratio at the surface: w_s = ε·e_s/(p−e_s)
-end
-
-
-
-""" Get Thermodynamics.jl parameter set from a NamedTuple of parameters (default value if not passed). """
-function get_thermo_params(params::NamedTuple)
-    return TD.Parameters.ThermodynamicsParameters(
-        error("not impleemnted yet")
-    )
 end
 
 

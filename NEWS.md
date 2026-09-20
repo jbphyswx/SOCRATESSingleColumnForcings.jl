@@ -34,7 +34,7 @@
   knots and applies a Gauss–Legendre rule matched to the spec's polynomial degree, so it is exact.
 - `coerce_to_shared_nodes` works for **all four** backends, via the new `interpolant_nodes` /
   `rebuild_interpolant` contract verbs; the `Vector`/`SVector`/`NTuple` methods collapsed into one.
-- `UniformRange` is constructible on an integer-seconds axis — the package's own LES time axis.
+- `UniformRange` is constructible on an integer-seconds axis — the package's own LES time axis. 
 - The docs build no longer depends on an absolute path to a worktree that does not exist.
 
 ### Changed
@@ -52,11 +52,20 @@
 - `integrate_method` is `IntegrateMass()` / `InvertMass()` rather than `:integrate` / `:invert`.
 - `output_interp_kwargs(Val)` → `output_z_regrid_opts(Val, opts)`.
 - `les_reference_profiles` takes one `z_regrid_opts`.
-- Added `q_vap_saturation_ice` to the thermodynamics contract and the Thermodynamics extension.
+- Thermodynamics renames: `q_vap_saturation_liquid` → `q_vap_saturation_liq`,
+  `calc_qg_from_pgTg` → `saturation_specific_humidity_from_pT(backend, p, T, phase)`,
+  `saturation_q_tot_from_pgTg` → `saturation_mixing_ratio_from_pT(backend, p, T, phase)`.
+- `equilibrium_condensate` and `saturation_adjust_pθq` take a `λ` keyword holding the liquid
+  fraction fixed. The forcing pipeline passes `λ = 1`, matching Atlas's liquid-only saturation
+  adjustment of ice-ignorant states.
+- Thermodynamics gained `q_vap_saturation_ice`, `q_vap_saturation`, `q_vap_saturation_from_pressure`,
+  `saturation_vapor_pressure` / `_liq` / `_ice`, `liquid_fraction`, `latent_heat_generic` /
+  `_vapor` / `_sublim`, the constant accessors (`cp_d`/`cp_v`/`cp_l`/`cp_i`, `T_0`, `T_freeze`,
+  `T_icenuc`, `L_v0`, `L_s0`, `e_ref`, `p_ref`), and the `Vapor` / `Liquid` / `Ice` phase types.
 
 ### Performance
 
-Allocation work in `get_column_forcing` (baseline 18.46 MiB for 11 fields, **not yet re-measured**):
+Allocation work in `get_column_forcing`:
 slice copies replaced by views, the shared coordinate hoisted out of the per-column loop,
 `combine_air_and_ground_data`'s insert path written into a preallocated output instead of `mapslices`,
 `lev_to_z` no longer building an array of tuples and its column kernel allocating nothing, and the
