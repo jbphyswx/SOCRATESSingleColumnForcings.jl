@@ -101,8 +101,11 @@ const default_conservative_interp_kwargs = (;
     integrate_method = InvertMass(),
 )
 
-const DCIKT = typeof(default_conservative_interp_kwargs)
-const DCIKDT = Dict{Symbol, Union{Bool, Symbol, Float64, AbstractConservativeIntegrateMethod}} # Dict for conservative interpolation kwargs
+const DCIKT = NamedTuple{ # NamedTuple for conservative interpolation kwargs
+    (:preserve_monotonicity, :enforce_positivity, :nnls_alg, :nnls_tol, :enforce_conservation, :integrate_method),
+    <:Tuple{Bool, Bool, Symbol, AbstractFloat, Bool, AbstractConservativeIntegrateMethod},
+}
+const DCIKDT = Dict{Symbol, Union{Bool, Symbol, AbstractFloat, AbstractConservativeIntegrateMethod}} # Dict for conservative interpolation kwargs
 const default_conservative_interp_kwargs_dict = DCIKDT(pairs(default_conservative_interp_kwargs))
 
 get_conservative_interp_kwargs(::Nothing) = default_conservative_interp_kwargs
