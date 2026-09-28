@@ -741,40 +741,11 @@ interpolant_nodes(itp::Fast1DLinearInterpolant) = itp.xp
 rebuild_interpolant(itp::Fast1DLinearInterpolant, xs, ys) =
     Fast1DLinearInterpolant(xs, ys; bc = itp.bc, drop_collinear = Val(false))
 
-"""
-    coerce_to_shared_nodes(itp_collection)
 
-Rebuild every interpolant in the collection on the shared, sorted union of all their nodes, so the
-collection is defined on one common node vector and/or type.
-
-Works for any backend supplying [`interpolant_nodes`](@ref) and [`rebuild_interpolant`](@ref), and
-preserves the container type (`Vector`, `SVector`, `NTuple`).
-"""
-function coerce_to_shared_nodes(itp_collection)
-    xs = sort!(unique!(reduce(vcat, (collect(interpolant_nodes(itp)) for itp in itp_collection))))
-    return map(itp -> rebuild_interpolant(itp, xs, itp.(xs)), itp_collection)
-end
-
-
-function coerce_to_shared_nodes(itp_collection::AbstractVector{T}) where {T <: Fast1DLinearInterpolant}
-    xs = sort(unique(reduce(vcat, (itp.xp for itp in itp_collection))))
-    return [Fast1DLinearInterpolant(xs, itp.(xs); bc = itp.bc, drop_collinear = Val(false)) for itp in itp_collection]
-end
-
-function coerce_to_shared_nodes(itp_collection::StaticArrays.SVector{N, T}) where {N, T <: Fast1DLinearInterpolant}
-    xs = sort(unique(reduce(vcat, (itp.xp for itp in itp_collection))))
-    return StaticArrays.SVector{N}(
-        Fast1DLinearInterpolant(xs, itp.(xs); bc = itp.bc, drop_collinear = Val(false)) for itp in itp_collection
-    )
-end
-
-function coerce_to_shared_nodes(itp_collection::NTuple{N, <:Fast1DLinearInterpolant}) where {N}
-    xs = sort(unique(reduce(vcat, (itp.xp for itp in itp_collection))))
-    return ntuple(
-        i -> Fast1DLinearInterpolant(xs, itp_collection[i].(xs); bc = itp_collection[i].bc, drop_collinear = Val(false)),
-        Val(N),
-    )
-end
+# ============================================================================
+# Coerce to shared nodes
+# ============================================================================
+include("shared_nodes.jl")
 
 
 
