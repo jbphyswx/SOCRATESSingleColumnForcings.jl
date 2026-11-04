@@ -71,8 +71,8 @@ end
 function SSCF.liquid_ice_pottemp(thermo_params::TD.Parameters.ThermodynamicsParameters, T, p, q_tot, q_liq, q_ice)
     return TD.liquid_ice_pottemp_given_pressure(thermo_params, T, p, q_tot, q_liq, q_ice)
 end
-function SSCF.liquid_ice_pottemp(thermo_params::TD.Parameters.ThermodynamicsParameters, T, p, q_tot)
-    (; q_liq, q_ice) = SSCF.equilibrium_condensate(thermo_params, T, p, q_tot)
+function SSCF.liquid_ice_pottemp(thermo_params::TD.Parameters.ThermodynamicsParameters, T, p, q_tot; λ = SSCF.liquid_fraction(thermo_params, T))
+    (; q_liq, q_ice) = SSCF.equilibrium_condensate(thermo_params, T, p, q_tot; λ = λ)
     return SSCF.liquid_ice_pottemp(thermo_params, T, p, q_tot, q_liq, q_ice)
 end
 
