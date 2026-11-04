@@ -192,7 +192,7 @@ compute(::Val{:vg_nudge}, base, tb) = _full(base, base.data["vg"], zero(base.FT)
 compute(::Val{:qt_nudge}, base, tb) = _full(base, base.q, base.qg) # total specific humidity
 compute(::Val{:T_nudge}, base, tb) = _full(base, base.T, base.Tg) # absolute temperature
 compute(::Val{:H_nudge}, base, tb) =
-    liquid_ice_pottemp.(tb, _full(base, base.T, base.Tg), _full(base, base.p, base.pg), _full(base, base.q, base.qg))
+    liquid_ice_pottemp.(tb, _full(base, base.T, base.Tg), _full(base, base.p, base.pg), _full(base, base.q, base.qg), λ = base.λ)
 compute(::Val{:subsidence}, base, tb) =
     _column_subsidence(base.data, base.ρ, _full(base, base.p, base.pg), base.z_dim_num, base.ground_indices, tb, base.FT)
 
@@ -312,9 +312,10 @@ function get_column_forcing(
         Tg = _materialize(data["Tg"], interpolant_value_types.parameters[2])
         q = wt_to_qt!(_materialize(data["q"], interpolant_value_types.parameters[2])) # mixing ratio -> specific humidity, in place on the owned copy
 
+        liq_frac = one(eltype(T))
         _state = saturation_adjust_pθq.(
-            thermodynamics_backend, p, dry_pottemp.(thermodynamics_backend, T, p), q; λ = one(eltype(T)), # really this should be (qt-qi) so saturation adjusment is accurate
-        )
+            thermodynamics_backend, p, dry_pottemp.(thermodynamics_backend, T, p), q; λ = liq_frac) # really this should be (qt-qi) so saturation adjusment is accurate
+        
         T = map(s -> s.T, _state)      # actual temperature
         q_liq = map(s -> s.q_liq, _state)  # equilibrium liquid (condensate-aware density)
         q_ice = map(s -> s.q_ice, _state)  # equilibrium ice
@@ -360,6 +361,7 @@ function get_column_forcing(
                 data = data,
                 thermodynamics_backend = thermodynamics_backend,
                 ground_indices = ground_indices,
+                λ = liq_frac
             )
         else
             z_old = lev_to_z_from_LES_output(
@@ -374,6 +376,7 @@ function get_column_forcing(
                 flight_number = flight_number,
                 forcing_type = forcing_type,
                 ground_indices = ground_indices,
+                λ = liq_frac
             )
         end
 
@@ -386,7 +389,7 @@ function get_column_forcing(
         # fraction `q_tot - q_liq - q_ice` (matters at saturated levels; the surface partition is resolved
         # from its own equilibrium condensate).
         ρ = air_density.(thermodynamics_backend, T, p, q, q_liq, q_ice)
-        _cg = equilibrium_condensate.(thermodynamics_backend, Tg, pg, qg)
+        _cg = equilibrium_condensate.(thermodynamics_backend, Tg, pg, qg; λ = liq_frac)
         ρg = air_density.(thermodynamics_backend, Tg, pg, qg, getproperty.(_cg, :q_liq), getproperty.(_cg, :q_ice))
         ρ = combine_air_and_ground_data(ρ, ρg, z_dim_num; insert_location = ground_indices)
 
@@ -440,7 +443,7 @@ function get_column_forcing(
 
         # `base.p` is the 4-D `p_grid` (lon,lat,lev,time) so full-column fields (H_nudge, subsidence)
         # combine it with the per-time 4-D `ground_indices`; the 3-D `p` is only for the `ρ` broadcast above.
-        base = (; data, z_dim_num, time_dim_num, T, p = p_grid, q, pg, Tg, qg, ρ, ground_indices, FT)
+        base = (; data, z_dim_num, time_dim_num, T, p = p_grid, q, pg, Tg, qg, ρ, λ = liq_frac, ground_indices, FT)
 
         # compute + regrid each requested :atlas_input output via Val-dispatch on its symbol; the
         # `compute` methods above assemble each pre-regrid field from `base`, and

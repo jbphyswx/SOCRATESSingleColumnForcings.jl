@@ -75,12 +75,13 @@ function lev_to_z_column_pTq(
     T_vec::AbstractVector,
     q_vec::AbstractVector;
     thermodynamics_backend = DefaultThermodynamicsBackend(),
+    λ = one(eltype(p_vec)),
 )
     FT = promote_type(eltype(p_vec), eltype(T_vec), eltype(q_vec))
     n = length(p_vec)
     return lev_to_z_column_pTq!(
         Vector{FT}(undef, n), Vector{FT}(undef, n), Vector{FT}(undef, n), Vector{FT}(undef, n),
-        p_vec, T_vec, q_vec; thermodynamics_backend,
+        p_vec, T_vec, q_vec; thermodynamics_backend, λ = λ
     )
 end
 
@@ -91,7 +92,7 @@ In-place [`lev_to_z_column_pTq`](@ref), writing the column's altitudes into `z` 
 work buffers as scratch.
 """
 function lev_to_z_column_pTq!(
-    z::AbstractVector,
+    z::AbstractVector{FT},
     p_work::AbstractVector,
     T_work::AbstractVector,
     q_work::AbstractVector,
@@ -100,8 +101,8 @@ function lev_to_z_column_pTq!(
     q_vec::AbstractVector;
     thermodynamics_backend = DefaultThermodynamicsBackend(),
     ground_index::Union{Nothing, Integer} = nothing,
-)
-    FT = eltype(z)
+    λ = one(FT),
+) where {FT}
     _R_d = R_d(thermodynamics_backend, FT)
     _grav = grav(thermodynamics_backend, FT)
 
@@ -109,6 +110,7 @@ function lev_to_z_column_pTq!(
     pg = FT(p_vec[end])
     Tg = FT(T_vec[end])
     qg = FT(q_vec[end])
+    λ = FT(λ)
 
     j = 0
     @inbounds for i in 1:L
@@ -134,7 +136,7 @@ function lev_to_z_column_pTq!(
     # virtual temperature at `i` and the one at `i + 1` carried from the previous step. The arithmetic
     # is the same, in the same order, as computing `Tvz` and `dz` in full first.
     _Tv(i) = @inbounds begin
-        q_liq, q_ice = equilibrium_condensate(thermodynamics_backend, T_work[i], p_work[i], q_work[i])
+        q_liq, q_ice = equilibrium_condensate(thermodynamics_backend, T_work[i], p_work[i], q_work[i]; λ = λ)
         virtual_temperature(thermodynamics_backend, T_work[i], q_work[i], q_liq, q_ice)
     end
 
@@ -174,6 +176,7 @@ function lev_to_z(
     thermodynamics_backend = DefaultThermodynamicsBackend(),
     assume_monotonic::Bool = false,
     ground_indices = nothing,
+    λ = one(eltype(T))
 )
     dimnames = NC.dimnames(data["T"])
     lev_dim_num = findfirst(x -> x == "lev", dimnames)
@@ -207,8 +210,7 @@ function lev_to_z(
     )
         lev_to_z_column_pTq!(
             dst, p_work, T_work, q_work, p_col, T_col, q_col;
-            thermodynamics_backend, ground_index = isnothing(idx) ? nothing : Int(idx),
-        )
+            thermodynamics_backend, ground_index = isnothing(idx) ? nothing : Int(idx), λ = λ)
     end
     return out
 end
@@ -222,8 +224,9 @@ function lev_to_z(
     qg::FT;
     data,
     thermodynamics_backend = DefaultThermodynamicsBackend(),
+    λ = one(FT),
 ) where {FT <: Real}
-    return lev_to_z([p], [T], [q], [pg], [Tg], [qg]; data, thermodynamics_backend)
+    return lev_to_z([p], [T], [q], [pg], [Tg], [qg]; data, thermodynamics_backend, λ = λ)
 end
 
 function lev_to_z_from_LES_output(
@@ -239,6 +242,7 @@ function lev_to_z_from_LES_output(
     flight_number::Int,
     forcing_type::AbstractForcingType,
     ground_indices = nothing,
+    λ = one(eltype(p)),
 )
     dimnames = NC.dimnames(data["T"])
     lev_dim_num = findfirst(x -> x == "lev", dimnames)
@@ -352,14 +356,14 @@ function lev_to_z_from_LES_output(
             selectdim(z, tdn, i_t)[i_t_min_p:i_t_max_p] =
                 lev_to_z_from_LES_output_column(p_t[i_t_min_p:i_t_max_p], z_LES, p_LES_t)
 
-            new_z = lev_to_z_column_pTq(p_t[i_t_max_p:end], T_t[i_t_max_p:end], q_t[i_t_max_p:end]; thermodynamics_backend)
+            new_z = lev_to_z_column_pTq(p_t[i_t_max_p:end], T_t[i_t_max_p:end], q_t[i_t_max_p:end]; thermodynamics_backend, λ = λ)
             new_dz = new_z[2:end] .- new_z[1:(end - 1)]
             new_dz = cumsum(new_dz)
             new_z = selectdim(z, tdn, i_t)[i_t_max_p] .+ new_dz
             selectdim(z, tdn, i_t)[(i_t_max_p + 1):end] = new_z
 
             selectdim(z, tdn, i_t)[1:(i_t_min_p - 1)] =
-                lev_to_z_column_pTq(p_t[1:i_t_min_p], T_t[1:i_t_min_p], q_t[1:i_t_min_p]; thermodynamics_backend)[1:(end - 1)] .+
+                lev_to_z_column_pTq(p_t[1:i_t_min_p], T_t[1:i_t_min_p], q_t[1:i_t_min_p]; thermodynamics_backend, λ = λ)[1:(end - 1)] .+
                 selectdim(z, tdn, i_t)[i_t_min_p]
             z_col = selectdim(z, tdn, i_t)
             z_col .-= z_col[index]
@@ -384,13 +388,13 @@ function lev_to_z_from_LES_output_column(
     return Interpolation.interpolate_1d(p_in, lesp, lesz, interp_method; bc = Interpolation.ErrorBoundaryCondition())
 end
 
-function z_from_data(data; thermodynamics_backend = DefaultThermodynamicsBackend())
+function z_from_data(data; thermodynamics_backend = DefaultThermodynamicsBackend(), λ = one(eltype(data["T"])))
     T = data["T"]
     q = wt_to_qt(_materialize(data["q"]))
     p = align_along_dimension(data["lev"], dim_num("lev", T))
     pg = data["Ps"]
     Tg = data["Tg"]
     qg = saturation_specific_humidity_from_pT.(thermodynamics_backend, pg, Tg)
-    return lev_to_z(p, T, q, pg, Tg, qg; data, thermodynamics_backend)
+    return lev_to_z(p, T, q, pg, Tg, qg; data, thermodynamics_backend, λ = λ)
 end
 
